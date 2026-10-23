@@ -78,6 +78,12 @@ jobs:
           mountpoint -q /sys/fs/bpf || sudo mount -t bpf bpf /sys/fs/bpf
           sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-routing"
           sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-web-control" --controller-binary "$GITHUB_WORKSPACE/extensions/ikuai-dpi-bridge/target/release/dpi-bridge"
+      - name: Make only isolated synthetic evidence readable to artifact uploader
+        if: always()
+        run: |
+          for output in "$RUNNER_TEMP/dpi-routing" "$RUNNER_TEMP/dpi-web-control"; do
+            if test -d "$output"; then sudo chown -R "$(id -u):$(id -g)" "$output"; fi
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

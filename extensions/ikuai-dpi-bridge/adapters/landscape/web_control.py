@@ -96,6 +96,8 @@ def load_config(path):
     if not isinstance(value["clients"], list) or not 1 <= len(value["clients"]) <= 256:
         raise ValueError("One to 256 fixed IPv4 clients required")
     clients = [str(ipaddress.IPv4Address(c)) for c in value["clients"]]
+    if any(ipaddress.IPv4Address(c).is_multicast or ipaddress.IPv4Address(c).is_loopback or ipaddress.IPv4Address(c).is_unspecified or ipaddress.IPv4Address(c).is_reserved for c in clients):
+        raise ValueError("Client scope cannot contain multicast, loopback, unspecified or reserved addresses")
     if len(set(clients)) != len(clients):
         raise ValueError("Duplicate fixed clients")
     value["clients"] = sorted(clients)
@@ -213,11 +215,17 @@ def load_catalog(path, application_map=None):
             entry["category_path"] = category
             entry["rule_count"] = integer(item["rule_count"], "rule_count", 0, 1_000_000)
             entry["endpoint_counts"] = {}
+            preview_bytes = 0
             for field in ("domains", "domain_patterns", "ips", "cidrs"):
                 values = item.get(field, [])
                 if not isinstance(values, list) or not all(isinstance(x, str) and len(x) <= 4096 for x in values):
                     raise ValueError("Invalid application endpoint metadata")
-                entry[field] = values[:16]
+                entry[field] = []
+                for text in values[:16]:
+                    encoded = len(text.encode("utf-8"))
+                    if preview_bytes + encoded <= 4096:
+                        entry[field].append(text)
+                        preview_bytes += encoded
                 entry["endpoint_counts"][field] = len(values)
             entry["_search"] = " ".join(category + [x for field in ("domains", "ips", "cidrs") for x in item.get(field, [])]).casefold()
         if not set(result) <= seen:

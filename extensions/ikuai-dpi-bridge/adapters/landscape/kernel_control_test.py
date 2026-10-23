@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import threading
+import shutil
 import time
 
 BASE = Path(__file__).resolve().parent
@@ -29,7 +30,9 @@ def verify(args, pins, transmit, expect, packet, report):
         (root / name).write_text(json.dumps(value))
     mapping = {"metadata": {"source_files": {name: {"bytes": (root / name).stat().st_size, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest()} for name in ("catalog.json", "all-rules.json")}}, "applications": [{"app_id": "42", "category_path": ["Synthetic", "HTTP"], "rule_count": 1, "domains": ["app.example.test"], "ips": [], "cidrs": [], "domain_patterns": []}]}
     (root / "applications.json").write_text(json.dumps(mapping))
-    config = {"schema_version": 1, "mode": "live", "state_dir": str(root / "state"), "token_file": str(root / "control.token"), "catalog": str(root / "catalog.json"), "application_map": str(root / "applications.json"), "rules": str(root / "all-rules.json"), "binary": str(args.controller_binary.resolve()), "clients": ["10.10.10.69"], "interface": "lan0", "pin_root": str(pins / "lan_maps"), "lines": [{"id": "telecom", "name": "Synthetic Telecom", "flow_id": 1, "wan_ifname": "wan1"}, {"id": "unicom", "name": "Synthetic Unicom", "flow_id": 2, "wan_ifname": "wan2"}]}
+    classifier = root / "dpi-bridge"
+    shutil.copyfile(args.controller_binary, classifier); classifier.chmod(0o700)
+    config = {"schema_version": 1, "mode": "live", "state_dir": str(root / "state"), "token_file": str(root / "control.token"), "catalog": str(root / "catalog.json"), "application_map": str(root / "applications.json"), "rules": str(root / "all-rules.json"), "binary": str(classifier.resolve()), "clients": ["10.10.10.69"], "interface": "lan0", "pin_root": str(pins / "lan_maps"), "lines": [{"id": "telecom", "name": "Synthetic Telecom", "flow_id": 1, "wan_ifname": "wan1"}, {"id": "unicom", "name": "Synthetic Unicom", "flow_id": 2, "wan_ifname": "wan2"}]}
     cfg = root / "control.json"; cfg.write_text(json.dumps(config)); cfg.chmod(0o600)
     backend = r.RoutingBackend(pins / "lan_maps")
     backend.reset_quiescent()
