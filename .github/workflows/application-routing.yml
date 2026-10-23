@@ -72,12 +72,23 @@ jobs:
           cargo test --locked --manifest-path extensions/ikuai-dpi-bridge/Cargo.toml
           cargo build --locked --release --manifest-path extensions/ikuai-dpi-bridge/Cargo.toml
           python3 -B -m unittest discover -s extensions/ikuai-dpi-bridge/tests -p '*_test.py' -v
-      - name: Real patched TC, XDP fallback and native NAT in fresh private namespaces
+      - name: Real patched TC and native NAT in fresh private namespaces
         run: |
           test -f /sys/kernel/btf/vmlinux
           mountpoint -q /sys/fs/bpf || sudo mount -t bpf bpf /sys/fs/bpf
           sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-routing"
           sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-web-control" --controller-binary "$GITHUB_WORKSPACE/extensions/ikuai-dpi-bridge/target/release/dpi-bridge"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-routing-controller-${{ github.sha }}
+          path: |
+            extensions/ikuai-dpi-bridge/adapters/landscape/receiver.py
+            extensions/ikuai-dpi-bridge/adapters/landscape/router.py
+            extensions/ikuai-dpi-bridge/adapters/landscape/service_runner.py
+            extensions/ikuai-dpi-bridge/adapters/landscape/web_control.py
+            extensions/ikuai-dpi-bridge/deployment
+            extensions/ikuai-dpi-bridge/target/release/dpi-bridge
+          retention-days: 7
       - name: Make only isolated synthetic evidence readable to artifact uploader
         if: always()
         run: |

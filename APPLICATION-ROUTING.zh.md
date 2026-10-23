@@ -29,7 +29,7 @@ cargo build --locked --release --manifest-path extensions/ikuai-dpi-bridge/Cargo
 python3 -B -m unittest discover -s extensions/ikuai-dpi-bridge/tests -p '*_test.py'
 ```
 
-Linux 主程序与前端的构建沿用官方 BUILD.zh.md。前端类型由同一源代码生成的 OpenAPI 生成；CI 保存主程序、前端和隔离测试证据。
+Linux 主程序与前端的构建沿用官方 BUILD.zh.md。前端类型由同一源代码生成的 OpenAPI 生成；CI 保存主程序、前端、带 Linux 分类器的控制服务安装材料和隔离测试证据。主程序编译环境为 Debian 13 x86_64；分类器为 Linux x86_64。主程序附件用于测试验收，其他系统需核对 glibc/内核兼容性或按官方构建流程重新编译。
 
 ## 离线准备安装文件
 
