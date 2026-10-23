@@ -34,7 +34,7 @@ class LandscapeServiceTests(unittest.TestCase):
             args = types.SimpleNamespace(policy=p / "policy", rules=p / "rules", binary=sys.executable,
                     interface="br-lan", pin_root="/sys/fs/bpf/landscape/test", initialize_quiescent=True, resume=False, max_flows=4096)
             plan = m.commands(args)
-            self.assertIn("--all", plan[1]); self.assertNotIn("--appids", plan[1])
+            self.assertIn("--quiet", plan[2]); self.assertIn("--all", plan[1]); self.assertNotIn("--appids", plan[1])
             self.assertEqual(plan[0][-1], "(tcp or udp) and (host 10.10.10.69)")
             self.assertIn("10.10.10.69/32", plan[1]); self.assertIn("--initialize-quiescent", plan[2])
             args.interface = "any"

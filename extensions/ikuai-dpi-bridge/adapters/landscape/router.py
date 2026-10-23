@@ -158,6 +158,10 @@ class RoutingBackend(r.Bpftool):
             for version in {ipaddress.ip_address(c).version for c in policy["clients"]}: self.check_wan(app, version)
         self.config(armed, 0)
         for key, _ in self.dump("dpi_rt_hint_v1"): self.delete("dpi_rt_hint_v1", key)
+        if not armed:
+            # A crash during an earlier first arm can leave client entries
+            # while cfg is still unarmed. Never expand a new client's scope.
+            for key in clients - requested: self.delete("dpi_rt_cli_v1", key)
         for key in requested: self.put("dpi_rt_cli_v1", key, struct.pack("=I", 1))
         self.config(1, 0)
     def status(self):
@@ -243,6 +247,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--policy", type=Path)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--quiet", action="store_true", help="Suppress per-flow success logs during supervised live capture")
     ap.add_argument("--pin-root")
     ap.add_argument("--initialize-quiescent", action="store_true")
     ap.add_argument("--resume", action="store_true")
@@ -250,6 +255,7 @@ def main(argv=None):
     ap.add_argument("--reset-quiescent", action="store_true", help="Explicit maintenance: clients must be stopped before clearing owned maps")
     ap.add_argument("--status", action="store_true")
     args = ap.parse_args(argv)
+    if args.quiet and not args.apply: ap.error("--quiet is for supervised --apply only")
     control = args.drain or args.reset_quiescent or args.status
     if (args.initialize_quiescent or args.resume or control) and not args.apply: ap.error("Control actions require --apply")
     if args.apply and (sys.platform != "linux" or not args.pin_root): ap.error("--apply needs Linux and explicit --pin-root")
@@ -290,7 +296,9 @@ def main(argv=None):
                     if len(buffer) > 1_000_000: raise ValueError("Event input buffer exceeds 1 MiB")
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
-                        if line.strip(): print(json.dumps(receiver.process(json.loads(line))), flush=True)
+                        if line.strip():
+                            result = receiver.process(json.loads(line))
+                            if not args.quiet: print(json.dumps(result), flush=True)
         finally:
             if backend: backend.config(1, 0)
         return int(failed)

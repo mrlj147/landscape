@@ -89,4 +89,22 @@ class LandscapeRoutingTests(unittest.TestCase):
         self.assertEqual(len(backend.values),100)
         self.assertEqual({x[0] for x in backend.values},{'dpi_rt_hint_v1'})
 
+class InitializationTests(unittest.TestCase):
+    def test_interrupted_first_arm_cannot_retain_clients_outside_new_immutable_scope(self):
+        class Backend(FakeBackend):
+            armed = 0
+            def check_routes(self): pass
+            def dump(self, name):
+                if name == "dpi_rt_cfg_v1": return [(b"", struct.pack("=IIQ", self.armed, 0, 0))]
+                if name == "dpi_rt_cli_v1": return [(m.client_key("10.10.10.70"), struct.pack("=I", 1))]
+                return []
+        backend = Backend()
+        m.RoutingBackend.initialize(backend, policy(), quiescent=True)
+        self.assertIn(("dpi_rt_cli_v1", m.client_key("10.10.10.70")), backend.deleted)
+        self.assertIn(("dpi_rt_cli_v1", m.client_key("10.10.10.69")), backend.values)
+        backend = Backend(); backend.armed = 1
+        with self.assertRaisesRegex(RuntimeError, "exactly the same client set"):
+            m.RoutingBackend.initialize(backend, policy(), resume=True)
+        self.assertEqual(backend.deleted, [])
+
 if __name__=='__main__':unittest.main()

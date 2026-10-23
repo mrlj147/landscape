@@ -44,7 +44,7 @@ def commands(args):
         ["tcpdump", "-i", args.interface, "-p", "-nn", "-s", "0", "-U", "-w", "-", capture_filter],
         [str(binary), "replay", "--rules", str(args.rules.resolve()), "--all", "--pcap", "-",
          "--client-cidr", ",".join(c + "/32" for c in clients), "--max-flows", str(args.max_flows)],
-        [sys.executable, str(BASE / "router.py"), "--policy", str(args.policy.resolve()), "--apply",
+        [sys.executable, str(BASE / "router.py"), "--policy", str(args.policy.resolve()), "--apply", "--quiet",
          "--pin-root", args.pin_root, "--initialize-quiescent" if args.initialize_quiescent else "--resume"],
     ]
 
