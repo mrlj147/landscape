@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -83,8 +84,8 @@ def absolute(value, field):
 def load_config(path):
     path = secure_file(absolute(str(path), "config"))
     value = json.loads(path.read_text())
-    common = {"schema_version", "mode", "state_dir", "token_file", "catalog", "clients", "lines"}
-    extra = {"netns", "interface", "pin_root", "rules", "binary", "max_flows", "application_map"}
+    common = {"schema_version", "mode", "state_dir", "token_file", "catalog", "clients"}
+    extra = {"netns", "interface", "pin_root", "rules", "binary", "max_flows", "application_map", "lines", "landscape_database"}
     if not isinstance(value, dict) or set(value) - common - extra or not common <= set(value):
         raise ValueError("Unknown or missing control configuration fields")
     if value["schema_version"] != 1 or type(value["schema_version"]) is not int:
@@ -101,21 +102,28 @@ def load_config(path):
     if len(set(clients)) != len(clients):
         raise ValueError("Duplicate fixed clients")
     value["clients"] = sorted(clients)
-    if not isinstance(value["lines"], list) or len(value["lines"]) != 2:
-        raise ValueError("Exactly two fixed lines required")
+    if ("lines" in value) == ("landscape_database" in value):
+        raise ValueError("Choose native Landscape WAN discovery or explicit test lines")
+    if "landscape_database" in value:
+        absolute(value["landscape_database"], "landscape_database")
+        if value["mode"] == "lab":
+            raise ValueError("Isolated lab cannot read the management Landscape database")
+        value["lines"] = []
+    if not isinstance(value["lines"], list) or len(value["lines"]) > 1023:
+        raise ValueError("Invalid WAN list")
     for line in value["lines"]:
         exact_fields(line, ("id", "name", "flow_id", "wan_ifname"))
-        if line["id"] not in ("telecom", "unicom") or not isinstance(line["name"], str) or not 1 <= len(line["name"]) <= 80:
+        if not isinstance(line["id"], str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", line["id"]) or not isinstance(line["name"], str) or not 1 <= len(line["name"]) <= 80:
             raise ValueError("Invalid fixed line")
         integer(line["flow_id"], "flow_id", 1, 255)
         if not isinstance(line["wan_ifname"], str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", line["wan_ifname"]):
             raise ValueError("Invalid fixed WAN interface")
-    if {x["id"] for x in value["lines"]} != {"telecom", "unicom"}:
+    if len({x["id"] for x in value["lines"]}) != len(value["lines"]):
         raise ValueError("Duplicate fixed line IDs")
-    if len({x["flow_id"] for x in value["lines"]}) != 2 or len({x["wan_ifname"] for x in value["lines"]}) != 2:
-        raise ValueError("Selectable lines must have distinct Flow IDs and WAN interfaces")
+    if len({x["flow_id"] for x in value["lines"]}) != len(value["lines"]):
+        raise ValueError("Selectable lines must have distinct Flow IDs")
     if value["mode"] == "lab":
-        required = extra - {"max_flows", "application_map"}
+        required = {"netns", "interface", "pin_root", "rules", "binary"}
         if not required <= set(value):
             raise ValueError("Missing isolated lab configuration")
         if value["netns"] != "dpi-web-lab" or value["interface"] != "lan0":
@@ -125,7 +133,7 @@ def load_config(path):
         if clients != ["10.10.10.69"]:
             raise ValueError("Lab uses only its fixed synthetic client")
         expected = {"telecom": (1, "wan1"), "unicom": (2, "wan2")}
-        if any((x["flow_id"], x["wan_ifname"]) != expected[x["id"]] for x in value["lines"]):
+        if {x["id"] for x in value["lines"]} != set(expected) or any((x["flow_id"], x["wan_ifname"]) != expected[x["id"]] for x in value["lines"]):
             raise ValueError("Lab line mappings differ from the isolated fixture")
         absolute(value["rules"], "rules")
         absolute(value["binary"], "binary")
@@ -149,6 +157,17 @@ def load_config(path):
         absolute(value["application_map"], "application_map")
     value["_config_path"] = str(path.resolve())
     return value
+
+
+def native_lines(config):
+    spec = importlib.util.spec_from_file_location("landscape_native_wan", BASE / "native_wan.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    lines = module.discover(config["landscape_database"])
+    for line in lines:
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", line["wan_ifname"]) or line["wan_ifname"] in ("lo", "any", config.get("interface")):
+            raise ValueError("Native WAN cannot use the controller LAN or an invalid interface")
+    return lines
 
 
 def atomic_json(path, value):
@@ -357,7 +376,7 @@ class Control:
             saved = json.loads(secure_file(self.state_path, private=True).read_text())
             exact_fields(saved, self.record)
             integer(saved["revision"], "stored revision")
-            self.validate_rules(saved["rules"])
+            self.validate_rules(saved["rules"], allow_missing_lines="landscape_database" in config)
             for name in ("last_applied_revision", "simulated_revision"):
                 if saved[name] is not None:
                     integer(saved[name], name, 0, saved["revision"])
@@ -366,6 +385,45 @@ class Control:
         self.error = None
         self.closed = False
         self.runtime_unverified = False
+        self.wan_source_error = None
+        self.wan_revocation_pending = False
+        self.refresh_lines()
+
+    def refresh_lines(self, deadline=None):
+        if "landscape_database" not in self.config:
+            return
+        with self.lock:
+            try:
+                lines = native_lines(self.config)
+                source_error = None
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+                lines = []
+                source_error = "无法读取当前 WAN 配置，请检查 Landscape 服务与配置来源"
+            updated = {x["id"]: x for x in lines}
+            def binding(line):
+                return None if line is None else tuple(line.get(k) for k in
+                    ("flow_id", "wan_ifname", "enabled", "configured_ready"))
+            changed = any(binding(self.lines.get(rule["line_id"])) != binding(updated.get(rule["line_id"]))
+                for rule in self.record["rules"])
+            self.lines = updated
+            self.wan_source_error = source_error
+            if changed or source_error or self.wan_revocation_pending:
+                self.record["simulated_revision"] = None
+                if self.runtime is not None and (self.runtime.alive() or self.live_revision is not None or self.wan_revocation_pending):
+                    self.wan_revocation_pending = True
+                    limit = min(deadline, time.monotonic() + 20) if deadline is not None else time.monotonic() + 20
+                    try:
+                        self.runtime.stop(deadline=limit)
+                        raw = self.runtime.inspect(force=True, deadline=limit)["runtime"]
+                        if self.runtime.alive() or raw["admission_live"]:
+                            raise RuntimeError("Admission has not drained")
+                        self.wan_revocation_pending = False
+                        self.runtime_unverified = False
+                        self.error = "WAN 配置已变化，已停止新分流；请核对出口后重新应用"
+                    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyError):
+                        self.runtime_unverified = True
+                        self.error = "WAN 配置已变化，停止状态待确认；请重试停止并核对"
+                    self.live_revision = None
 
     def ensure_open(self, recovery=False):
         if self.closed:
@@ -386,7 +444,7 @@ class Control:
         finally:
             self.lock.release()
 
-    def validate_rules(self, rules):
+    def validate_rules(self, rules, allow_missing_lines=False):
         if not isinstance(rules, list) or len(rules) > MAX_RULES:
             raise ControlError("rules must be a list of at most 4096 application mappings")
         found, result = set(), []
@@ -395,8 +453,8 @@ class Control:
             appid = integer(rule["appid"], "appid", 1, 0xffffffff)
             if appid not in self.catalog or appid in found:
                 raise ControlError("Unknown or duplicate AppID")
-            if not isinstance(rule["line_id"], str) or rule["line_id"] not in self.lines:
-                raise ControlError("Unknown line; only configured Telecom/Unicom lines are selectable")
+            if not isinstance(rule["line_id"], str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", rule["line_id"]) or (not allow_missing_lines and rule["line_id"] not in self.lines):
+                raise ControlError("所选 WAN 已不存在，请刷新并重新选择出口")
             if type(rule["learn_endpoint"]) is not bool or type(rule["allow_udp_endpoint_hints"]) is not bool:
                 raise ControlError("Endpoint-learning permissions must be explicit booleans")
             if rule["allow_udp_endpoint_hints"] and not rule["learn_endpoint"]:
@@ -426,6 +484,7 @@ class Control:
 
     def status(self, deadline=None):
         with self.lock:
+            self.refresh_lines(deadline=deadline)
             lines = [{**x, "ready": False} for x in self.lines.values()]
             active, raw = None, None
             state = "stopped"
@@ -435,7 +494,7 @@ class Control:
                 state = "running" if simulated is not None else "stopped"
                 message = "Offline simulation only. No packets, BPF maps, interfaces or system services are modified."
                 for line in lines:
-                    line["reason"] = "Preview has no real WAN readiness check"
+                    line["reason"] = line.get("configuration_reason") or "Preview has no real WAN readiness check"
             else:
                 try:
                     current = self.runtime.inspect(deadline=deadline)
@@ -458,7 +517,11 @@ class Control:
                     state, message = "error", self.error
                 if self.runtime_unverified:
                     active = None
+            if self.wan_source_error:
+                state, message = "unavailable", self.wan_source_error
             return {"mode": self.mode, "simulated": self.mode == "preview", "state": state, "message": message,
+                "wan_source": "landscape" if "landscape_database" in self.config else "fixture",
+                "wan_source_error": self.wan_source_error,
                 "runtime_unverified": self.runtime_unverified,
                 "saved_revision": self.record["revision"], "active_revision": active,
                 "simulated_revision": simulated, "last_applied_revision": self.record["last_applied_revision"],
@@ -468,8 +531,11 @@ class Control:
     def save(self, body):
         exact_fields(body, ("expected_revision", "rules"))
         integer(body["expected_revision"], "expected_revision")
-        rules = self.validate_rules(body["rules"])
         with self.mutation():
+            self.refresh_lines()
+            if self.wan_source_error:
+                raise ControlError(self.wan_source_error, 503, "wan_source_unavailable")
+            rules = self.validate_rules(body["rules"])
             if body["expected_revision"] != self.record["revision"]:
                 raise ControlError("Policy changed; refresh before saving", 409, "revision_conflict")
             next_record = {**self.record, "revision": self.record["revision"] + 1, "rules": rules}
@@ -484,6 +550,11 @@ class Control:
             raise ControlError("initial_quiescent must be an explicit boolean")
         with self.mutation():
             time_limit(deadline, 1)
+            self.refresh_lines(deadline=deadline)
+            self.ensure_open()
+            if self.wan_source_error:
+                raise ControlError(self.wan_source_error, 503, "wan_source_unavailable")
+            self.validate_rules(self.record["rules"])
             if body["revision"] != self.record["revision"]:
                 raise ControlError("Saved revision changed; refresh before applying", 409, "revision_conflict")
             if self.mode == "preview":
@@ -491,6 +562,8 @@ class Control:
                 atomic_json(self.state_path, next_record)
                 self.record, self.error = next_record, None
                 return self.status()
+            if any(not self.lines[r["line_id"]].get("configured_ready", True) for r in self.record["rules"]):
+                raise ControlError("所选 WAN 尚未启用 IPv4、NAT 或专用 Flow", 409, "line_unavailable")
             started = time.monotonic()
             deadline = min(deadline, started + APPLY_SECONDS) if deadline is not None else started + APPLY_SECONDS
             work_deadline = deadline - (APPLY_SECONDS - WORK_SECONDS)
@@ -616,6 +689,14 @@ def runtime_inspect(config, policy_path=None):
     """Read kernel state only after immutable deployment/namespace checks."""
     if config["mode"] not in ("lab", "live") or sys.platform != "linux" or os.geteuid() != 0:
         raise ValueError("Runtime inspection requires a configured Linux root deployment")
+    lines_config = config["lines"]
+    if "landscape_database" in config:
+        try:
+            lines_config = native_lines(config)
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            if policy_path is not None:
+                raise ValueError("Native WAN configuration is unavailable")
+            lines_config = []  # Admission can still be inspected and stopped.
     if config["mode"] == "lab":
         target = Path("/run/netns") / config["netns"]
         if not target.exists() or os.stat(target).st_ino != os.stat("/proc/self/ns/net").st_ino:
@@ -630,7 +711,7 @@ def runtime_inspect(config, policy_path=None):
     else:
         links = subprocess.run(["/usr/sbin/ip", "-j", "link", "show"], capture_output=True, text=True, check=True, timeout=5, env=SAFE_ENV)
         names = {x["ifname"] for x in json.loads(links.stdout)}
-        required = {config["interface"], *(x["wan_ifname"] for x in config["lines"])}
+        required = {config["interface"]}
         if not required <= names:
             raise ValueError("Configured LAN/WAN interfaces are not present")
         if Path(config["pin_root"]).resolve() != Path(config["pin_root"]):
@@ -646,8 +727,10 @@ def runtime_inspect(config, policy_path=None):
         validate_lan_program(config, backend)
     state = backend.status()
     lines = []
-    for line in config["lines"]:
+    for line in lines_config:
         try:
+            if not line.get("configured_ready", True):
+                raise ValueError(line["configuration_reason"])
             backend.check_wan(line, 4)
             lines.append({"id": line["id"], "ready": True})
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -660,6 +743,8 @@ def runtime_inspect(config, policy_path=None):
         if policy["clients"] != config["clients"]:
             raise ValueError("Client scope differs from immutable deployment configuration")
         for app in policy["applications"].values():
+            if "landscape_database" in config and not any(x.get("configured_ready") and x["flow_id"] == app["flow_id"] and x["wan_ifname"] == app["wan_ifname"] for x in lines_config):
+                raise ValueError("Policy target no longer matches an enabled native WAN/Flow")
             backend.check_wan(app, 4)
     # Bound browser response size; the count remains the complete dump count.
     state["pinned_connection_count"] = len(state["pinned_connections"])
@@ -807,6 +892,17 @@ def main(argv=None):
     control = Control(config)
     server = Server(("127.0.0.1", PORT), control, token)
     stopping = threading.Event()
+    def watch_wans():
+        while not stopping.wait(2):
+            # A WAN edit must revoke a stale producer even with no browser open.
+            if control.lock.acquire(blocking=False):
+                try:
+                    if not control.closed:
+                        control.refresh_lines(deadline=time.monotonic() + 20)
+                finally:
+                    control.lock.release()
+    if "landscape_database" in config:
+        threading.Thread(target=watch_wans, daemon=True).start()
     def stop(_sig, _frame):
         if not stopping.is_set():
             stopping.set()
@@ -815,6 +911,7 @@ def main(argv=None):
     try:
         server.serve_forever(poll_interval=.2)
     finally:
+        stopping.set()
         server.server_close()
         control.close()
         for sig, handler in previous.items():

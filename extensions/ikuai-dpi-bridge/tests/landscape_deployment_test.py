@@ -44,6 +44,18 @@ class DeploymentTests(unittest.TestCase):
             m.stage(self.args)
         self.assertFalse(self.args.output.exists())
 
+    def test_native_install_discovers_all_wans_without_carrier_arguments(self):
+        for key in ("telecom_flow", "telecom_wan", "unicom_flow", "unicom_wan"):
+            delattr(self.args, key)
+        self.args.landscape_db = Path('/var/lib/landscape/landscape_db.sqlite')
+        m.stage(self.args)
+        config = json.loads((self.args.output / 'etc/landscape-dpi/control.json').read_text())
+        self.assertNotIn('lines', config)
+        self.assertEqual(config['landscape_database'], str(self.args.landscape_db))
+        self.assertTrue((self.args.output / 'opt/landscape-dpi/adapters/landscape/native_wan.py').exists())
+        unit = (self.args.output / 'etc/systemd/system/landscape-dpi.service').read_text()
+        self.assertIn('BindReadOnlyPaths="/var/lib/landscape"', unit)
+
     def test_macos_binary_and_ambiguous_lan_are_refused(self):
         self.args.binary.write_bytes(b"\xcf\xfa\xed\xfe" + bytes(60))
         with self.assertRaisesRegex(ValueError, "ELF"):

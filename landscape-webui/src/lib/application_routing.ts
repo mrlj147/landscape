@@ -8,10 +8,12 @@ export interface ApplicationRule {
 export interface ApplicationLine {
   id: string;
   name: string;
-  flow_id: number;
+  flow_id: number | null;
   wan_ifname: string;
   ready: boolean;
   reason?: string;
+  enabled?: boolean;
+  configured_ready?: boolean;
 }
 
 export interface ApplicationEntry {
@@ -39,6 +41,8 @@ export interface ApplicationRoutingStatus {
   catalog_total: number;
   clients: string[];
   lines: ApplicationLine[];
+  wan_source?: "landscape" | "fixture";
+  wan_source_error?: string | null;
   policy: { revision: number; rules: ApplicationRule[] };
   runtime: {
     armed?: boolean;
@@ -156,6 +160,7 @@ export class ApplicationRoutingDraft {
   }
 
   add(appid: number, lineId: string): boolean {
+    if (!lineId) return false;
     if (this.rules.some((rule) => rule.appid === appid)) return false;
     this.rules.push({
       appid,
@@ -202,6 +207,9 @@ export function saveBlockReason(draft: ApplicationRoutingDraft): string | null {
     return "运行状态尚未确认，请先重试停止并核对状态";
   }
   if (draft.conflict) return "服务器草稿已更新，请重新载入后编辑";
+  if (draft.status.wan_source_error) return draft.status.wan_source_error;
+  if (draft.rules.some((rule) => !draft.status!.lines.some((line) => line.id === rule.line_id)))
+    return "所选 WAN 已不存在，请重新选择出口或移除对应规则";
   return null;
 }
 
@@ -229,6 +237,7 @@ export function applyBlockReason(
   if (status.state === "unavailable") return status.message || "控制服务不可用";
   if (draft.conflict) return "服务器草稿已更新，请重新载入后编辑";
   if (draft.dirty) return "请先保存草稿，再应用已保存的版本";
+  if (!status.lines.length) return "尚未配置 WAN，请先添加实际的 WAN 线路";
   for (const rule of draft.rules) {
     const line = status.lines.find((item) => item.id === rule.line_id);
     if (!line) return "所选线路已不存在，请重新选择出口";

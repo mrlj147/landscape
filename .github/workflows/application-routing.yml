@@ -86,6 +86,7 @@ jobs:
             extensions/ikuai-dpi-bridge/adapters/landscape/router.py
             extensions/ikuai-dpi-bridge/adapters/landscape/service_runner.py
             extensions/ikuai-dpi-bridge/adapters/landscape/web_control.py
+            extensions/ikuai-dpi-bridge/adapters/landscape/native_wan.py
             extensions/ikuai-dpi-bridge/deployment
             extensions/ikuai-dpi-bridge/target/release/dpi-bridge
           retention-days: 7

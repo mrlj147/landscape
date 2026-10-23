@@ -6,7 +6,7 @@
 
 - 从导入的完整应用目录搜索名称、AppID、分类、显式域名和 IP。
 - 显示 `category_path`、规则数、域名、域名表达式、IP、CIDR。每类预览最多 16 项，计数保留完整值。这些是规则中的引用，不代表应用全部服务器。
-- 按应用选择「电信」或「联通」，保存、应用和停止；显示保存版本与实际运行版本、内核 admission lease、连接数和线路就绪情况。
+- 按应用选择当前配置的 WAN（数量不限于两条，名称沿用 WAN 备注，规则按 UUID 关联），保存、应用和停止；显示保存版本与实际运行版本、内核 admission lease、连接数和线路就绪情况。
 - `preview` 只做离线模拟，`lab` 只允许固定隔离环境，`live` 使用部署时明确配置的客户端、LAN、BPF 目录和两个 Flow/WAN。网页不能随意提交网口、命令、任意上游地址或扩大客户端范围。
 
 ## 实际路由语义
@@ -33,7 +33,9 @@ Linux 主程序与前端的构建沿用官方 BUILD.zh.md。前端类型由同�
 
 ## 离线准备安装文件
 
-先在 Landscape 原生网页配置好两个单出口 Flow、对应 WAN/PPPoE、NAT 和 LAN。应用选线复用这些原生 Flow，不负责创建拨号或更改接线。
+WAN 目录从当前 Landscape v0.27.1 的 SQLite 数据库只读获取，支持 0、1 或多条线路，包含 PPPoE 的实际接口。网页每 5 秒刷新；新增和改名会自动反映，删除后的旧规则会提示重新选择。读取失败会明确报错，不回退到预设的电信、联通。
+
+实际应用前，各目标 WAN 需启用 IPv4、NAT，并拥有仅指向该 WAN 的已启用单出口 Flow（Flow ID 1–255）。存在多个合适 Flow 时，稳定选择最小 ID；多 WAN 加权 Flow 不冒充单出口。未就绪的 WAN 仍显示，并说明原因。该目录是已配置的逻辑 WAN，不会把管理网口当作外网，也不会自动创建拨号、Flow 或修改接线。当前读取方式适用于 SQLite；其他数据库后端尚未支持。
 
 从私有仓库同一版本导出三份文件到一个私有目录：`all-rules.json`、`catalog.json`、`application-map/applications.json`（后者放到目录根）。私有仓库原有定时更新继续生成完整映射，导入前必须核对规则与表格哈希属于同一版本。
 
@@ -44,16 +46,15 @@ python3 extensions/ikuai-dpi-bridge/deployment/stage_install.py \
   --binary /path/to/linux/dpi-bridge \
   --client 192.0.2.69 --lan br-lan \
   --pin-root /sys/fs/bpf/landscape/default \
-  --telecom-flow 1 --telecom-wan ppp0 \
-  --unicom-flow 2 --unicom-wan ppp1
+  --landscape-db /root/.landscape-router/landscape_db.sqlite
 ```
 
-参数是示例；网口、Flow 与 BPF 目录必须对应目标测试机。生成目录包含程序、独立随机控制令牌、完整库、配置和 systemd 单元，权限受限。此步骤不安装、不启服务、不更改网络。
+参数是示例；LAN、原生数据库与 BPF 目录必须对应目标测试机。默认目录仅是原生程序的默认位置，自定义部署须填写实际数据库。安装树包含数据库目录的只读服务绑定，以读取实时 WAL；不会复制数据库或 PPP 账号密码。生成目录包含程序、独立随机控制令牌、完整库、配置和 systemd 单元，权限受限。此步骤不安装、不启服务、不更改网络。
 
 由操作者在目标 Linux 上检查后复制该目录内容到 `/`，确认 `python3`、`tcpdump`、`iproute2` 与 `/usr/sbin/bpftool` 可用，再启动 `landscape-dpi.service`。原生网页服务通过默认 `/var/lib/landscape-dpi/control.token` 访问控制器（可用 `LANDSCAPE_DPI_TOKEN_PATH` 调整）。控制器只监听 `127.0.0.1:6310`，浏览器继续使用 Landscape 原有登录。
 
 首次应用必须暂停指定客户端流量并明确确认初始化；控制器会核对实际 LAN TC 程序引用的 map ID、全部 16 个 Flow 出口槽以及原生 NAT hook。无法核对时拒绝应用。保存草稿不等于生效；服务重启后不会凭历史记录宣称规则仍在运行，需重新应用，已有 armed maps 会安全 resume。机器重启后 maps 未初始化时仍需首次确认；本扩展不保证整网无人值守恢复或无缝替代爱快。
 
-更新完整库应先停止应用分流控制服务，整体替换三份同版本文件，再启动并应用保存策略；不要分别热改文件。停止只关闭新连接的应用分流 admission，旧连接跟随原生 NAT 排空。未配置本扩展时，原生 Landscape 转发路径保持原行为。
+更新完整库应先停止应用分流控制服务，整体替换三份同版本文件，再启动并应用保存策略；不要分别热改文件。WAN 被删除、关闭、绑定变化或配置来源不可用时，后台监视器会停止本控制器管理的新分流 producer；仅改名不会中断运行。旧规则保留，需核对出口后重新应用；不自动改投另一条 WAN。停止只关闭新连接的应用分流 admission，旧连接跟随原生 NAT 排空。未配置本扩展时，原生 Landscape 转发路径保持原行为。
 
-本次开发和 CI 均不连接家庭 PVE，不启动 VM104，不负责操作者的 PVE/网口或现网切换。
+CI 仅使用隔离测试环境。VM104 网页演示须经明确授权，并保持预览模式；PVE 网口、接线和实际切换由操作者负责，演示不代表家庭网络已经迁移。

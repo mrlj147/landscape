@@ -45,6 +45,7 @@ const quiescent = ref(false);
 let searchSequence = 0;
 let statusSequence = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+let wanRefreshTimer: ReturnType<typeof setInterval> | undefined;
 let disposed = false;
 
 const status = computed(() => draft.status);
@@ -62,7 +63,7 @@ const applyReason = computed(() =>
 );
 const lineOptions = computed(() =>
   (status.value?.lines ?? []).map((line) => ({
-    label: line.name,
+    label: `${line.name} · ${line.wan_ifname}`,
     value: line.id,
   })),
 );
@@ -159,7 +160,7 @@ function changePage(value: number) {
   void refreshCatalog();
 }
 function addApplication(entry: ApplicationEntry) {
-  if (controlsDisabled.value) return;
+  if (controlsDisabled.value || !lineOptions.value.length) return;
   remember([entry]);
   if (draft.add(entry.appid, status.value?.lines[0]?.id ?? "")) policyPage.value = Math.ceil(draft.rules.length / policyPageSize);
 }
@@ -264,11 +265,13 @@ function stop() {
 onMounted(() => {
   void refreshStatus();
   void refreshCatalog();
+  wanRefreshTimer = setInterval(() => { if (!busy.value && !loading.value) void refreshStatus(); }, 5000);
 });
 onUnmounted(() => {
   disposed = true;
   ++searchSequence;
   if (debounceTimer) clearTimeout(debounceTimer);
+  if (wanRefreshTimer) clearInterval(wanRefreshTimer);
 });
 </script>
 
@@ -278,7 +281,7 @@ onUnmounted(() => {
       <div class="page-heading">
         <div>
           <h2>应用分流</h2>
-          <n-text depth="3">选择应用，为后续新连接指定电信或联通出口。</n-text>
+          <n-text depth="3">选择应用，为后续新连接指定已配置的 WAN 出口。线路名称和数量自动读取当前配置。</n-text>
         </div>
         <n-button :loading="loading" :disabled="!!busy" @click="refreshStatus"
           >刷新状态</n-button
@@ -288,7 +291,7 @@ onUnmounted(() => {
       <n-alert
         v-if="preview"
         type="info"
-        title="Mac 离线预览 · 不接触真实网络"
+        title="离线预览 · 不接触真实网络"
         :bordered="false"
       >
         保存和模拟应用仅更新本地预览数据。这里的线路、运行状态与连接数均不代表家庭网络已分流。
@@ -299,9 +302,13 @@ onUnmounted(() => {
         title="测试机验证环境"
         :bordered="false"
       >
-        电信 /
-        联通标签当前对应测试出口；真实运营商线路尚未验收。本页不代表家庭网络已迁移。
+        当前显示隔离测试出口；真实运营商线路尚未验收。本页不代表家庭网络已迁移。
       </n-alert>
+
+      <n-alert v-if="status && !status.lines.length && !status.wan_source_error" type="warning" title="尚未配置 WAN">
+        当前没有可读取的 WAN 线路。请先在 Landscape 中配置 WAN，再返回此处选择；应用库仍可浏览。
+      </n-alert>
+      <n-text v-if="status?.wan_source === 'landscape'" depth="3">已读取 {{ status.lines.length }} 个 WAN · 每 5 秒自动刷新</n-text>
       <n-alert
         v-else-if="status?.mode === 'live'"
         type="info"
@@ -405,7 +412,7 @@ onUnmounted(() => {
                 </div>
                 <n-button
                   size="small"
-                  :disabled="controlsDisabled || selectedIds.has(entry.appid)"
+                  :disabled="controlsDisabled || !lineOptions.length || selectedIds.has(entry.appid)"
                   @click="addApplication(entry)"
                   >{{
                     selectedIds.has(entry.appid) ? "已添加" : "添加"
@@ -471,6 +478,7 @@ onUnmounted(() => {
                     draft.update(rule.appid, { line_id: value })
                 "
               />
+              <n-text v-if="!status?.lines.some(line => line.id === rule.line_id)" type="warning">原 WAN 已删除，请重新选择出口或移除此规则。</n-text>
               <n-space vertical :size="6" class="rule-options">
                 <n-checkbox
                   :checked="rule.learn_endpoint"
@@ -562,14 +570,15 @@ onUnmounted(() => {
             </n-space>
           </n-card>
 
-          <n-card :title="preview ? '模拟出口' : '测试出口状态'" size="small">
+          <n-card title="WAN 出口状态" size="small">
+            <n-empty v-if="status && !status.lines.length" description="当前没有配置 WAN" />
             <n-space vertical :size="10"
               ><div
                 v-for="line in status?.lines ?? []"
                 :key="line.id"
                 class="line-status"
               >
-                <n-text>{{ line.name }}</n-text
+                <n-text>{{ line.name }} · {{ line.wan_ifname }}</n-text
                 ><n-tag
                   size="small"
                   :type="preview || line.ready ? 'info' : 'warning'"
@@ -577,13 +586,13 @@ onUnmounted(() => {
                     preview
                       ? "可模拟 · 未验证真实线路"
                       : line.ready
-                        ? "测试出口就绪"
+                        ? "出口就绪"
                         : "尚未就绪"
                   }}</n-tag
                 ><n-text v-if="line.reason" depth="3">{{
                   preview &&
                   line.reason === "Preview has no real WAN readiness check"
-                    ? "此出口可用于模拟选线，尚未连接或验证真实电信、联通线路。"
+                    ? "此 WAN 可用于模拟选线，尚未验证真实网络出口。"
                     : line.reason
                 }}</n-text>
               </div></n-space

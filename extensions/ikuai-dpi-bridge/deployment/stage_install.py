@@ -19,14 +19,27 @@ def stage(args):
     if args.output.exists():
         raise ValueError("Output directory already exists")
     lan = args.lan
-    if not m.re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan) or lan in ("any", "lo", args.telecom_wan, args.unicom_wan):
+    legacy = [getattr(args, x, None) for x in ("telecom_flow", "telecom_wan", "unicom_flow", "unicom_wan")]
+    native = getattr(args, "landscape_db", None)
+    if native is not None and any(x is not None for x in legacy):
+        raise ValueError("Use native WAN discovery or explicit legacy fixture lines, not both")
+    if any(x is not None for x in legacy) and not all(x is not None for x in legacy):
+        raise ValueError("Incomplete legacy fixture lines")
+    if not m.re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan) or lan in ("any", "lo", legacy[1], legacy[3]):
         raise ValueError("Explicit distinct LAN/WAN names required")
     binary = args.binary.resolve()
     header = binary.read_bytes()[:20]
     if len(header) < 20 or header[:5] != b"\x7fELF\x02" or header[5] != 1 or int.from_bytes(header[18:20], "little") not in (62, 183):
         raise ValueError("Use a built Linux x86_64/aarch64 ELF classifier; a macOS build cannot run on Linux")
     source = args.library.resolve()
-    config = {"schema_version": 1, "mode": "live", "state_dir": "/var/lib/landscape-dpi/state", "token_file": "/var/lib/landscape-dpi/control.token", "catalog": "/var/lib/landscape-dpi/library/catalog.json", "application_map": "/var/lib/landscape-dpi/library/applications.json", "rules": "/var/lib/landscape-dpi/library/all-rules.json", "binary": "/opt/landscape-dpi/bin/dpi-bridge", "clients": args.client, "interface": lan, "pin_root": args.pin_root, "lines": [{"id": "telecom", "name": "电信", "flow_id": args.telecom_flow, "wan_ifname": args.telecom_wan}, {"id": "unicom", "name": "联通", "flow_id": args.unicom_flow, "wan_ifname": args.unicom_wan}]}
+    config = {"schema_version": 1, "mode": "live", "state_dir": "/var/lib/landscape-dpi/state", "token_file": "/var/lib/landscape-dpi/control.token", "catalog": "/var/lib/landscape-dpi/library/catalog.json", "application_map": "/var/lib/landscape-dpi/library/applications.json", "rules": "/var/lib/landscape-dpi/library/all-rules.json", "binary": "/opt/landscape-dpi/bin/dpi-bridge", "clients": args.client, "interface": lan, "pin_root": args.pin_root, "lines": [{"id": "telecom", "name": "电信", "flow_id": legacy[0], "wan_ifname": legacy[1]}, {"id": "unicom", "name": "联通", "flow_id": legacy[2], "wan_ifname": legacy[3]}]}
+    if not all(x is not None for x in legacy):
+        config.pop("lines")
+        native = Path(native or "/root/.landscape-router/landscape_db.sqlite")
+        m.absolute(str(native), "landscape_db")
+        if any(c in str(native) for c in '\r\n\x00'):
+            raise ValueError("Invalid database path")
+        config["landscape_database"] = str(native)
     mapping = json.loads((source / "applications.json").read_text())
     for name in ("all-rules.json", "catalog.json"):
         raw = (source / name).read_bytes(); wanted = mapping["metadata"]["source_files"][name]
@@ -35,7 +48,7 @@ def stage(args):
     m.load_catalog(source / "catalog.json", source / "applications.json")
     root = args.output.resolve(); root.mkdir(parents=True, mode=0o700)
     runtime = root / "opt/landscape-dpi/adapters/landscape"; runtime.mkdir(parents=True)
-    for name in ("receiver.py", "router.py", "service_runner.py", "web_control.py"):
+    for name in ("receiver.py", "router.py", "service_runner.py", "web_control.py", "native_wan.py"):
         shutil.copyfile(BASE / "adapters/landscape" / name, runtime / name)
     dest = root / "opt/landscape-dpi/bin/dpi-bridge"; dest.parent.mkdir(); shutil.copyfile(binary, dest); dest.chmod(0o700)
     library = root / "var/lib/landscape-dpi/library"; library.mkdir(parents=True, mode=0o700)
@@ -44,6 +57,12 @@ def stage(args):
     token = root / "var/lib/landscape-dpi/control.token"; token.write_text(secrets.token_urlsafe(48) + "\n"); token.chmod(0o600)
     cfg = root / "etc/landscape-dpi/control.json"; cfg.parent.mkdir(parents=True, mode=0o700); cfg.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n"); cfg.chmod(0o600)
     unit = root / "etc/systemd/system/landscape-dpi.service"; unit.parent.mkdir(parents=True); shutil.copyfile(BASE / "deployment/landscape-dpi.service", unit)
+    if "landscape_database" in config:
+        # Read-only directory binding also exposes the writer's live WAL/SHM
+        # while keeping ProtectHome enabled for the rest of the home tree.
+        directory = str(Path(config["landscape_database"]).parent).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%')
+        with unit.open("a") as out:
+            out.write('\n[Service]\nBindReadOnlyPaths="' + directory + '"\n')
     # Validate all non-runtime configuration fields using staged local files.
     local = dict(config)
     for field in ("state_dir", "token_file", "catalog", "application_map", "rules", "binary"):
@@ -66,10 +85,11 @@ def main():
     p.add_argument("--client", action="append", required=True)
     p.add_argument("--lan", required=True)
     p.add_argument("--pin-root", required=True)
-    p.add_argument("--telecom-flow", type=int, required=True)
-    p.add_argument("--telecom-wan", required=True)
-    p.add_argument("--unicom-flow", type=int, required=True)
-    p.add_argument("--unicom-wan", required=True)
+    p.add_argument("--landscape-db", type=Path, help="Native Landscape SQLite database; default: /root/.landscape-router/landscape_db.sqlite")
+    p.add_argument("--telecom-flow", type=int, help=argparse.SUPPRESS)
+    p.add_argument("--telecom-wan", help=argparse.SUPPRESS)
+    p.add_argument("--unicom-flow", type=int, help=argparse.SUPPRESS)
+    p.add_argument("--unicom-wan", help=argparse.SUPPRESS)
     result = stage(p.parse_args())
     print(json.dumps({"files": len(result["files"]), "services_started": False, "network_modified": False}))
 
