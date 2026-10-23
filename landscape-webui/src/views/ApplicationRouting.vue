@@ -34,6 +34,9 @@ const loading = ref(false);
 const search = ref("");
 const page = ref(1);
 const pageSize = 20;
+const policyPage = ref(1);
+const policyPageSize = 20;
+const visibleRules = computed(() => draft.rules.slice((policyPage.value - 1) * policyPageSize, policyPage.value * policyPageSize));
 const total = ref(0);
 const catalogLoading = ref(false);
 const entries = ref<ApplicationEntry[]>([]);
@@ -79,7 +82,7 @@ function remember(items: ApplicationEntry[]) {
 }
 
 async function resolveSelectedNames() {
-  const missing = draft.rules.filter((rule) => !names[rule.appid]);
+  const missing = visibleRules.value.filter((rule) => !names[rule.appid]);
   // Bounded requests also allow a large saved policy to remain responsive.
   for (let start = 0; start < missing.length && !disposed; start += 4) {
     await Promise.all(
@@ -148,6 +151,9 @@ watch(search, () => {
   debounceTimer = setTimeout(() => void refreshCatalog(), 250);
 });
 
+watch(policyPage, () => void resolveSelectedNames());
+watch(() => draft.rules.length, (count) => { policyPage.value = Math.min(policyPage.value, Math.max(1, Math.ceil(count / policyPageSize))); });
+
 function changePage(value: number) {
   page.value = value;
   void refreshCatalog();
@@ -155,7 +161,7 @@ function changePage(value: number) {
 function addApplication(entry: ApplicationEntry) {
   if (controlsDisabled.value) return;
   remember([entry]);
-  draft.add(entry.appid, status.value?.lines[0]?.id ?? "");
+  if (draft.add(entry.appid, status.value?.lines[0]?.id ?? "")) policyPage.value = Math.ceil(draft.rules.length / policyPageSize);
 }
 
 function reloadSaved() {
@@ -433,7 +439,7 @@ onUnmounted(() => {
               description="从应用库添加需要指定出口的应用。空规则沿用默认分流。"
             />
             <div
-              v-for="rule in draft.rules"
+              v-for="rule in visibleRules"
               :key="rule.appid"
               class="policy-row"
             >
@@ -491,6 +497,7 @@ onUnmounted(() => {
                 >
               </n-space>
             </div>
+            <n-pagination v-if="draft.rules.length > policyPageSize" v-model:page="policyPage" :page-size="policyPageSize" :item-count="draft.rules.length" :page-slot="5" size="small" />
           </n-card>
 
           <n-card title="保存与应用" size="small">
