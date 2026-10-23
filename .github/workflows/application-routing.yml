@@ -1,7 +1,7 @@
 name: Application routing v0.27.1
 on:
   push:
-    branches: [main, ikuai-app-routing-v0.27.1]
+    branches: [main, app-routing-v0.27.1]
     paths-ignore: ['**/*.md']
   pull_request:
     paths-ignore: ['**/*.md']
