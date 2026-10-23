@@ -1,0 +1,21 @@
+[Unit]
+Description=Landscape application routing controller
+After=network-online.target landscape.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/landscape-dpi/adapters/landscape/web_control.py serve --config /etc/landscape-dpi/control.json
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=100
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -26,3 +26,7 @@ landscape-types/.bindings.lock
 
 # Local environment
 .env
+
+# Independent application classifier build products and local datasets
+extensions/ikuai-dpi-bridge/target/
+**/__pycache__/

@@ -1,3 +1,5 @@
+> 此 fork 基于 v0.27.1，新增应用选电信/联通的分流扩展。见 [应用分流说明与测试边界](APPLICATION-ROUTING.zh.md)。
+
 <div align="center">
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-green.svg)](https://www.gnu.org/licenses/gpl-3.0)  

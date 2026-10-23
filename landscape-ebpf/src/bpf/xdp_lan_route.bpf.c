@@ -29,6 +29,8 @@
 #include "neigh/neigh_ip4.h"
 #include "neigh/neigh_ip6.h"
 #include "route/neigh_learn.h"
+#include "dpi/metadata.h"
+#include "dpi/routing.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -753,10 +755,14 @@ int xdp_lan_route(struct xdp_md *ctx) {
 
     if (unlikely(is_broadcast_or_mcast_mac(eth->h_dest))) return XDP_PASS;
 
+    /* One route decision path while armed, including after producer failure. */
+    if (dpi_routing_armed()) return XDP_PASS;
+
     if (eth->h_proto == ETH_IPV4) {
         struct route4_context context = {};
         ret = xdp_read_ipv4(ctx, &context);
         if (ret) return ret;
+        dpi_observe_xdp(ctx, 4);
 
         if (unlikely(is_broadcast_ip4(context.daddr))) {
             return XDP_PASS;
@@ -783,6 +789,7 @@ int xdp_lan_route(struct xdp_md *ctx) {
         struct route6_context context = {};
         ret = xdp_read_ipv6(ctx, &context);
         if (ret) return ret;
+        dpi_observe_xdp(ctx, 6);
 
         if (unlikely(is_broadcast_ip6(context.daddr.bytes))) {
             return XDP_PASS;

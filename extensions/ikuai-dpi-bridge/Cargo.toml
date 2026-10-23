@@ -1,0 +1,20 @@
+[package]
+name = "dpi-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Conservative, offline-testable application classification bridge"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.12"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+
+# Independent classifier workspace; no private rule database is bundled.
+[workspace]

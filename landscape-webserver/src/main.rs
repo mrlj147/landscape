@@ -74,6 +74,7 @@ mod auth;
 mod cert;
 mod devices;
 mod dns;
+mod dpi;
 mod docker;
 mod dump;
 mod error;
@@ -599,6 +600,7 @@ async fn run_system(
         .nest("/metrics", metrics_router)
         .nest("/self-monitor", self_monitor_router)
         .nest("/gateway", gateway_router)
+        .nest("/dpi", dpi::routes())
         .with_state(landscape_app_status.clone())
         .nest("/system", system_combined)
         .route_layer(axum::middleware::from_fn_with_state(auth_share.clone(), auth::auth_handler));

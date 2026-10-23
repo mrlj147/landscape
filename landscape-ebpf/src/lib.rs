@@ -4,6 +4,8 @@ pub mod bpf_error;
 pub(crate) mod bpf_rs_shared;
 pub mod dao_ns;
 pub mod dns_result_sink;
+mod dpi_metadata;
+mod dpi_routing;
 pub mod flow_socket_registrar;
 pub mod landscape;
 pub mod maps;

@@ -88,6 +88,11 @@ const menuOptions = computed<MenuOption[]>(() =>
       icon: renderIcon(CicsSystemGroup),
     },
     {
+      label: t("routes.application-routing"),
+      key: "application-routing",
+      icon: renderIcon(ModelBuilder),
+    },
+    {
       label: t("routes.flow"),
       key: "flow",
       icon: renderIcon(ModelBuilder),

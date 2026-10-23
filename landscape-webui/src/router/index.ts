@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from "vue-router";
 
 import Landscape from "@/views/Landscape.vue";
+import ApplicationRouting from "@/views/ApplicationRouting.vue";
 import MainLayout from "@/views/MainLayout.vue";
 import Flow from "@/views/Flow.vue";
 import Docker from "@/views/Docker.vue";
@@ -31,6 +32,7 @@ import metric_route from "./metric";
 import self_monitor_route from "./self_monitor";
 
 const inner_zone: Array<RouteRecordRaw> = [
+  { path: "/application-routing", name: "routes.application-routing", component: ApplicationRouting },
   {
     path: "/",
     name: "routes.dashboard",

@@ -1,4 +1,5 @@
 export default {
+  "application-routing": "应用分流",
   dashboard: "系统概览",
   status: "服务状态",
   "network-status": "网络状态",

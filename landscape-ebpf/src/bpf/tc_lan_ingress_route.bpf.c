@@ -14,6 +14,8 @@
 
 #include "chain/tc_cb.h"
 #include "chain/tc_handoff.h"
+#include "dpi/metadata.h"
+#include "dpi/tc_route.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -187,8 +189,21 @@ int tc_route4_lan_ingress(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
 
+    dpi_observe_tc(skb, current_l3_offset, 4, xdp_handoff_enabled && !dpi_routing_armed());
+
     if (unlikely(is_broadcast_ip4(context.daddr))) {
         return TC_ACT_UNSPEC;
+    }
+
+    if (dpi_routing_armed() && !is_host_direct(flow_mark)) {
+        /* Local delivery and explicit DROP/DIRECT/REDIRECT policies precede app hints. */
+        learn_src_ip_mac_v4_tc(skb, &context, current_l3_offset);
+        ret = tc_route4_lan_redirect_check_in_lan(skb, current_l3_offset, &context);
+        if (ret != TC_ACT_OK) return ret;
+        ret = route4_flow_verdict(skb, current_l3_offset, &context, &flow_mark);
+        if (ret != TC_ACT_OK) return ret;
+        ret = dpi_route4_tc(skb, current_l3_offset, &context, flow_mark);
+        if (ret != TC_ACT_OK) return ret;
     }
 
     ret = route4_search_cache_in_lan(skb, current_l3_offset, &context, &flow_mark);
@@ -240,8 +255,21 @@ int tc_route6_lan_ingress(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
 
+    dpi_observe_tc(skb, current_l3_offset, 6, xdp_handoff_enabled && !dpi_routing_armed());
+
     if (unlikely(is_broadcast_ip6(context.daddr.bytes))) {
         return TC_ACT_UNSPEC;
+    }
+
+    if (dpi_routing_armed() && !is_host_direct(flow_mark)) {
+        /* Local delivery and explicit DROP/DIRECT/REDIRECT policies precede app hints. */
+        learn_src_ip_mac_v6_tc(skb, &context, current_l3_offset);
+        ret = tc_route6_lan_redirect_check_in_lan(skb, current_l3_offset, &context);
+        if (ret != TC_ACT_OK) return ret;
+        ret = route6_flow_verdict(skb, current_l3_offset, &context, &flow_mark);
+        if (ret != TC_ACT_OK) return ret;
+        ret = dpi_route6_tc(skb, current_l3_offset, &context, flow_mark);
+        if (ret != TC_ACT_OK) return ret;
     }
 
     ret = route6_search_cache_in_lan(skb, current_l3_offset, &context, &flow_mark);

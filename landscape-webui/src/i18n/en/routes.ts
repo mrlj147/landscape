@@ -1,4 +1,5 @@
 export default {
+  "application-routing": "Application routing",
   dashboard: "Dashboard",
   status: "Service Status",
   "network-status": "Network Status",

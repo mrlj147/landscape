@@ -1,0 +1,118 @@
+name: Application routing v0.27.1
+on:
+  push:
+    branches: [main, ikuai-app-routing-v0.27.1]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: application-routing-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    container: rust:1.99.1-trixie
+    timeout-minutes: 60
+    env:
+      CLANG: clang-19
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/setup_debian13_build.sh
+      - uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            target
+          key: app-native-0271-${{ hashFiles('Cargo.lock') }}
+          restore-keys: app-native-0271-
+      - name: Compile the complete patched server and eBPF objects
+        run: cargo build --locked -p landscape-webserver
+      - name: Native proxy schema, routing map ABI, and fresh OpenAPI
+        run: |
+          cargo test --locked -p landscape-webserver dpi::tests -- --nocapture
+          cargo test --locked -p landscape-ebpf dpi_ -- --nocapture
+          cargo test --locked -p landscape-webserver export_openapi_json -- --nocapture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-routing-native-${{ github.sha }}
+          path: |
+            target/debug/landscape-webserver
+            landscape-types/openapi.json
+          retention-days: 7
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the Linux verifier test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-19 libbpf-dev linux-tools-generic iproute2 tcpdump
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 190
+          BPFTOOL=$(find -L /usr/lib/linux-tools -type f -name bpftool -print -quit)
+          test -n "$BPFTOOL"
+          sudo ln -sf "$BPFTOOL" /usr/sbin/bpftool
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            extensions/ikuai-dpi-bridge/target
+          key: app-classifier-${{ hashFiles('extensions/ikuai-dpi-bridge/Cargo.lock') }}
+      - name: Classifier and policy transport regression
+        run: |
+          cargo test --locked --manifest-path extensions/ikuai-dpi-bridge/Cargo.toml
+          cargo build --locked --release --manifest-path extensions/ikuai-dpi-bridge/Cargo.toml
+          python3 -B -m unittest discover -s extensions/ikuai-dpi-bridge/tests -p '*_test.py' -v
+      - name: Real patched TC, XDP fallback and native NAT in fresh private namespaces
+        run: |
+          test -f /sys/kernel/btf/vmlinux
+          mountpoint -q /sys/fs/bpf || sudo mount -t bpf bpf /sys/fs/bpf
+          sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-routing"
+          sudo env "PATH=$PATH" unshare --net python3 -B extensions/ikuai-dpi-bridge/adapters/landscape/linux_routing_test.py --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/dpi-web-control" --controller-binary "$GITHUB_WORKSPACE/extensions/ikuai-dpi-bridge/target/release/dpi-bridge"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-routing-kernel-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/dpi-routing/result.json
+            ${{ runner.temp }}/dpi-routing/commands.log
+            ${{ runner.temp }}/dpi-web-control/result.json
+            ${{ runner.temp }}/dpi-web-control/commands.log
+            ${{ runner.temp }}/dpi-web-control/controller/state/pipeline.log
+          if-no-files-found: warn
+          retention-days: 7
+  frontend:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-routing-native-${{ github.sha }}
+          path: .native-artifact
+      - run: cp .native-artifact/landscape-types/openapi.json landscape-types/openapi.json
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @landscape-router/types generate
+          pnpm --filter landscape-webui test
+          pnpm --filter landscape-webui build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-routing-webui-${{ github.sha }}
+          path: landscape-webui/dist
+          retention-days: 7

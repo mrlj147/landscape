@@ -18,6 +18,7 @@ landscape-ebpf = { path = "../landscape-ebpf" }
 landscape-gateway = { path = "../landscape-gateway", optional = true }
 
 arc-swap = { workspace = true }
+reqwest = { workspace = true, features = ["json", "query"] }
 
 rustls = { workspace = true }
 rcgen = { workspace = true }

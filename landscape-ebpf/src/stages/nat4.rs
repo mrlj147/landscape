@@ -29,6 +29,7 @@ pub struct Nat4Handle {
 }
 
 pub struct TcNat4Handle {
+    dpi_nat_epoch: u64,
     dp: Arc<WanLinkDataplane>,
     _skel: crate::skel::tc_nat4::TcNat4Skel<'static>,
     _backing: crate::landscape::OwnedOpenObject,
@@ -37,6 +38,7 @@ pub struct TcNat4Handle {
 impl Drop for TcNat4Handle {
     fn drop(&mut self) {
         use crate::chain::stage::{FromLanStageType, FromWanStageType, StageFamily};
+        let _ = crate::dpi_routing::nat_ready_remove(self.dp.backbone().paths(), self.dp.id(), self.dpi_nat_epoch);
         self.dp.tc().remove_from_wan(FromWanStageType::Nat, StageFamily::V4);
         self.dp.tc().remove_from_lan(FromLanStageType::Nat, StageFamily::V4);
     }
@@ -145,6 +147,9 @@ pub fn attach_nat4(
     pin_and_reuse_map(&mut tc_open.maps.nat4_static_map, &paths.nat4_static_map)?;
     pin_and_reuse_map(&mut tc_open.maps.nat_metric_events, &paths.nat_metric_events)?;
 
+    crate::dpi_routing::bind(paths, &mut tc_open.maps.dpi_rt_cfg_v1,
+        &mut tc_open.maps.dpi_rt_cli_v1, &mut tc_open.maps.dpi_rt_hint_v1,
+        &mut tc_open.maps.dpi_rt_flow_v1, &mut tc_open.maps.dpi_rt_nat_v1)?;
     let tc_skel = bpf_ctx!(tc_open.load(), "load tc_nat4 skeleton")?;
 
     seed_runtime_queues(
@@ -231,6 +236,9 @@ pub fn attach_nat4(
         xdp_rodata.icmp_range_end = config.icmp_in_range.end;
     }
 
+    crate::dpi_routing::bind(paths, &mut xdp_open.maps.dpi_rt_cfg_v1,
+        &mut xdp_open.maps.dpi_rt_cli_v1, &mut xdp_open.maps.dpi_rt_hint_v1,
+        &mut xdp_open.maps.dpi_rt_flow_v1, &mut xdp_open.maps.dpi_rt_nat_v1)?;
     let xdp_skel = bpf_ctx!(xdp_open.load(), "load xdp_nat4 skeleton")?;
 
     // ── 3. Inject into the link's chain ──
@@ -270,8 +278,11 @@ pub fn attach_nat4(
         },
     )?;
 
+    let dpi_nat_epoch = crate::dpi_routing::nat_ready(paths, dp.id(), ifindex, wan_ro_addr4(wan_addr))?;
+
     Ok(Nat4Handle {
         tc: TcNat4Handle {
+            dpi_nat_epoch,
             dp: dp.clone(),
             _skel: tc_skel,
             _backing: tc_backing,

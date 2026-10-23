@@ -5,6 +5,7 @@
 #include "nat/nat_metric.h"
 #include "nat/nat4_dyn_map.h"
 #include "nat/nat4_map_ops.h"
+#include "dpi/nat_lifecycle.h"
 
 #ifndef ENOENT
 #define ENOENT 2
@@ -49,6 +50,8 @@ static __always_inline int nat4_metric_try_report(struct nat4_timer_key *timer_k
 }
 
 static __always_inline u32 nat4_timer_delete_ct(struct nat4_timer_key *key) {
+    struct nat4_timer_value_v3 *dpi_ct = bpf_map_lookup_elem(&nat4_timer_map, key);
+    if (dpi_ct) dpi_nat4_retire(key, dpi_ct);
     bpf_map_delete_elem(&nat4_timer_map, key);
     return NAT4_TIMER_STEP_DELETE_CT;
 }
@@ -335,6 +338,7 @@ static __always_inline int nat4_ct_resolve(const struct nat4_timer_key *ct_key,
     struct nat4_timer_value_v3 *timer_value = bpf_map_lookup_elem(&nat4_timer_map, ct_key);
     if (timer_value) {
         if (track_dynamic_ref && timer_value->generation_snapshot != generation_snapshot) {
+            dpi_nat4_retire(ct_key, timer_value);
             bpf_map_delete_elem(&nat4_timer_map, ct_key);
         } else if (!nat4_ct_status_usable(timer_value->status)) {
             return -1;

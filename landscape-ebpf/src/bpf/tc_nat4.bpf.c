@@ -90,6 +90,7 @@ static __always_inline int tc_nat_v4_egress_do(struct __sk_buff *skb, u32 ifinde
     }
 
     if (!is_icmpx_error) {
+        if (!dpi_nat4_bind(&ct_key, ct_value)) return TC_ACT_SHOT;
         nat4_ct_advance(idx.pkt_type, NAT_MAPPING_EGRESS, ct_value);
         nat_metric_accumulate(skb, false, ct_value);
     }

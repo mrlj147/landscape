@@ -40,6 +40,11 @@ pub fn init_tc_lan_route(
     let mut open_skel = bpf_ctx!(builder.open(obj), "open per-if tc_lan_ingress_route")?;
     open_skel.maps.rodata_data.as_deref_mut().unwrap().current_l3_offset = l3_offset;
     open_skel.maps.rodata_data.as_deref_mut().unwrap().xdp_handoff_enabled = xdp_handoff_enabled;
+    crate::dpi_metadata::bind(paths, &mut open_skel.maps.dpi_labels_v1,
+                              &mut open_skel.maps.dpi_counts_v1)?;
+    crate::dpi_routing::bind(paths, &mut open_skel.maps.dpi_rt_cfg_v1,
+        &mut open_skel.maps.dpi_rt_cli_v1, &mut open_skel.maps.dpi_rt_hint_v1,
+        &mut open_skel.maps.dpi_rt_flow_v1, &mut open_skel.maps.dpi_rt_nat_v1)?;
     crate::bpf_ctx!(
         pin_and_reuse_map(&mut open_skel.maps.flow_match_map, &paths.flow_match_map),
         "tc_lan_route pin flow_match_map"
