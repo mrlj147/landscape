@@ -101,10 +101,16 @@ class LiveControlTests(unittest.TestCase):
                     return {"id": {"dpi_rt_cfg_v1": 1, "dpi_rt_cli_v1": 2, "dpi_rt_flow_v1": 3, "dpi_rt_hint_v1": 4}[Path(args[-1]).name]}
                 return [{"map_ids": [1, 2, 3, 99] if self.wrong else [1, 2, 3, 4]}]
         backend = Backend()
-        result = types.SimpleNamespace(stdout=json.dumps([{"kind": "bpf", "options": {"id": 9}}]))
+        result = types.SimpleNamespace(stdout=json.dumps([{"kind": "bpf", "options": {"prog": {"id": 9}}}]))
         with patch.object(m.subprocess, "run", return_value=result) as run:
             m.validate_lan_program(self.value, backend)
             self.assertEqual(run.call_args.args[0][-2:], ["br-lan", "ingress"])
+            result.stdout = json.dumps([{"kind": "bpf", "options": {"id": 9}}])
+            m.validate_lan_program(self.value, backend)
+            result.stdout = json.dumps([{"kind": "bpf", "options": {"id": 9, "prog": {"id": 10}}}])
+            with self.assertRaisesRegex(ValueError, "contradictory"):
+                m.validate_lan_program(self.value, backend)
+            result.stdout = json.dumps([{"kind": "bpf", "options": {"prog": {"id": 9}}}])
             backend.wrong = True
             with self.assertRaisesRegex(ValueError, "no attached"):
                 m.validate_lan_program(self.value, backend)

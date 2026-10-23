@@ -591,8 +591,18 @@ def validate_lan_program(config, backend):
             info = info[0] if len(info) == 1 else {}
         required.add(integer(info["id"], "kernel map id", 1, 2**32 - 1))
     for entry in json.loads(filters.stdout):
-        program = entry.get("options", {}).get("id") if entry.get("kind") == "bpf" else None
-        if type(program) is not int:
+        if entry.get("kind") != "bpf" or not isinstance(entry.get("options"), dict):
+            continue
+        options = entry["options"]
+        # iproute2 bpf_dump_prog_info emits options.prog.id; support older
+        # direct-id output too, but never accept contradictory identities.
+        nested = options.get("prog", {})
+        nested_id = nested.get("id") if isinstance(nested, dict) else None
+        direct_id = options.get("id")
+        if nested_id is not None and direct_id is not None and nested_id != direct_id:
+            raise ValueError("TC filter reports contradictory program IDs")
+        program = nested_id if nested_id is not None else direct_id
+        if type(program) is not int or program <= 0:
             continue
         info = backend.command("prog", "show", "id", str(program))
         if isinstance(info, list):
