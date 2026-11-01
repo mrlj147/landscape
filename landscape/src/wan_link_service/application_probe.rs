@@ -82,7 +82,10 @@ async fn resolve_at(
     socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
     socket.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(socket.into())?;
-    let name = Name::from_ascii(domain).map_err(|e| ProbeError::Config(e.to_string()))?;
+    let mut name = Name::from_ascii(domain).map_err(|e| ProbeError::Config(e.to_string()))?;
+    // DNS wire names always include the root label. Normalize user input
+    // before comparing the echoed question ("example.com" == "example.com.").
+    name.set_fqdn(true);
     let mut request = Message::new(rand::random(), MessageType::Query, OpCode::Query);
     request.metadata.recursion_desired = true;
     request.queries.push(Query::query(name, RecordType::A));
