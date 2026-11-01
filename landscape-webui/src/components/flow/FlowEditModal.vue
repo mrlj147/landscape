@@ -50,6 +50,30 @@ const rule_enabled = computed({
   },
 });
 
+const ordered_targets = computed(
+  () =>
+    !!rule.value?.failover?.enable ||
+    rule.value?.failover?.mode === "primary_backup",
+);
+const failover_enabled = computed({
+  get: () => rule.value?.failover?.enable ?? false,
+  set: (enable: boolean) => {
+    if (!rule.value) return;
+    rule.value.failover = {
+      ...rule.value.failover,
+      mode: "primary_backup",
+      enable,
+      auto_failback: rule.value.failover?.auto_failback ?? true,
+    };
+  },
+});
+function restoreWeightedMode() {
+  if (rule.value?.failover) {
+    rule.value.failover.mode = "weighted";
+    rule.value.failover.enable = false;
+  }
+}
+
 async function enter() {
   if (props.rule_id) {
     rule.value = await getFlowRule(props.rule_id);
@@ -106,7 +130,7 @@ async function saveRule() {
   }
 
   if (
-    !rule.value.failover?.enable &&
+    !ordered_targets.value &&
     rule.value.flow_targets.length > 0 &&
     rule.value.flow_targets.every((target) => (target.weight ?? 1) === 0)
   ) {
@@ -114,12 +138,12 @@ async function saveRule() {
     return;
   }
 
-  if (rule.value.failover?.enable) {
+  if (ordered_targets.value) {
     const ids = rule.value.flow_targets.map((entry) =>
       entry.target.t === "interface" ? entry.target.link_id : "",
     );
     if (
-      ids.length < 2 ||
+      ids.length < (rule.value.failover?.enable ? 2 : 1) ||
       ids.includes("") ||
       new Set(ids).size !== ids.length
     ) {
@@ -206,7 +230,7 @@ function normalizeFlowTargets(
         </FlowMatchRule>
       </n-form-item>
       <n-form-item v-if="rule.failover" :label="t('flow.failover.enable')">
-        <n-switch v-model:value="rule.failover.enable" />
+        <n-switch v-model:value="failover_enabled" />
       </n-form-item>
       <n-form-item
         v-if="rule.failover?.enable"
@@ -214,11 +238,16 @@ function normalizeFlowTargets(
       >
         <n-switch v-model:value="rule.failover.auto_failback" />
       </n-form-item>
-      <n-alert
-        v-if="rule.failover?.enable"
-        type="info"
+      <n-alert v-if="ordered_targets" type="info" style="margin-bottom: 16px">{{
+        t("flow.failover.hint")
+      }}</n-alert>
+      <n-button
+        v-if="ordered_targets && !rule.failover?.enable"
+        text
+        type="primary"
         style="margin-bottom: 16px"
-        >{{ t("flow.failover.hint") }}</n-alert
+        @click="restoreWeightedMode"
+        >{{ t("flow.failover.restore_weighted") }}</n-button
       >
       <n-form-item label="">
         <template #label>
@@ -233,7 +262,7 @@ function normalizeFlowTargets(
 
         <FlowTargetRule
           v-model:target_rules="rule.flow_targets"
-          :failover="rule.failover?.enable ?? false"
+          :failover="ordered_targets"
         >
         </FlowTargetRule>
       </n-form-item>

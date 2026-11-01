@@ -677,7 +677,11 @@ mod cascade_delete_tests {
         let provider = LandscapeDBServiceProvider::mem_test_db().await;
         let id = Uuid::new_v4();
         let mut config = flow(id, 7);
-        config.failover = FlowFailoverConfig { enable: true, auto_failback: false };
+        config.failover = FlowFailoverConfig {
+            enable: true,
+            auto_failback: false,
+            ..Default::default()
+        };
         config.flow_targets = [2, 1]
             .into_iter()
             .map(|id| {

@@ -17,6 +17,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    env:
+      RUST_LOG: warn
     steps:
       - uses: actions/checkout@v6
       - run: ./scripts/setup_ubuntu_build.sh

@@ -79,7 +79,7 @@ impl FailoverSelections {
         let mut result = collect_target_refresh_result(configs, routes);
         for config in configs {
             let key = (config.flow_id, ipv6);
-            if !config.enable || !config.failover.enable {
+            if !config.enable || !config.failover.ordered_targets() {
                 self.active.remove(&key);
                 continue;
             }
@@ -99,12 +99,15 @@ impl FailoverSelections {
                 .active
                 .get(&key)
                 .and_then(|old| (old.order == order).then_some(old.selected).flatten());
-            let selected =
-                if !config.failover.auto_failback && previous.as_ref().is_some_and(available) {
-                    previous
-                } else {
-                    order.iter().copied().find(available)
-                };
+            let selected = if !config.failover.enable {
+                // Manual mode deliberately keeps the chosen primary even
+                // when probes say it cannot reach the Internet.
+                order.first().copied().filter(|id| routes.contains_key(&RouteOwner::Link(*id)))
+            } else if !config.failover.auto_failback && previous.as_ref().is_some_and(available) {
+                previous
+            } else {
+                order.iter().copied().find(available)
+            };
             if previous != selected {
                 tracing::info!(
                     flow_id = config.flow_id,
@@ -215,7 +218,7 @@ impl IpRouteService {
 #[cfg(test)]
 mod failover_tests {
     use super::*;
-    use landscape_common::flow::{FlowFailoverConfig, WeightedFlowTarget};
+    use landscape_common::flow::{FlowFailoverConfig, FlowTargetMode, WeightedFlowTarget};
     use landscape_common::sys_service::route_service::RouteTargetInfo;
     use landscape_common::wan_link::HealthEvaluator;
     use std::net::Ipv4Addr;
@@ -258,7 +261,11 @@ mod failover_tests {
                     )
                 })
                 .collect(),
-            failover: FlowFailoverConfig { enable: true, auto_failback: true },
+            failover: FlowFailoverConfig {
+                mode: FlowTargetMode::PrimaryBackup,
+                enable: true,
+                auto_failback: true,
+            },
             name: String::new(),
             remark: String::new(),
             update_at: 0.0,
@@ -327,15 +334,31 @@ mod failover_tests {
     }
 
     #[test]
-    fn disabling_failover_preserves_weights_and_disabled_flow_has_no_slots() {
+    fn legacy_weighted_mode_and_disabled_flow_remain_unchanged() {
         let (mut config, routes, _, _, _) = setup();
         let mut state = FailoverSelections::default();
         config.failover.enable = false;
+        config.failover.mode = FlowTargetMode::Weighted;
         let result = state.resolve(&[config.clone()], &routes, &LinkHealths::new(), false);
         assert_eq!(result[&9].len(), 2);
         assert!(result[&9].iter().all(|(_, weight)| *weight == 7));
         config.enable = false;
         assert!(selected(&mut state, &config, &routes, &LinkHealths::new()).is_empty());
+    }
+
+    #[test]
+    fn automatic_switching_off_stays_on_primary_even_when_unhealthy() {
+        let (mut config, mut routes, mut health, primary, _) = setup();
+        let mut state = FailoverSelections::default();
+        health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unhealthy;
+        assert_eq!(selected(&mut state, &config, &routes, &health), ["wan2"]);
+        config.failover.enable = false;
+        assert_eq!(selected(&mut state, &config, &routes, &health), ["wan1"]);
+        routes.remove(&RouteOwner::Link(primary));
+        assert!(
+            selected(&mut state, &config, &routes, &health).is_empty(),
+            "must not use backup while automatic switching is off"
+        );
     }
 
     #[test]

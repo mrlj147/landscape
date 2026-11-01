@@ -41,10 +41,13 @@ pub struct FlowConfig {
     pub update_at: f64,
 }
 
-/// Opt-in ordered WAN failover. Disabled preserves weighted routing.
+/// Opt-in ordered WAN failover. Legacy flows remain in weighted mode.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlowFailoverConfig {
+    /// Ordered mode remains selected when automatic switching is turned off.
+    #[serde(default)]
+    pub mode: FlowTargetMode,
     #[serde(default)]
     pub enable: bool,
     #[serde(default = "default_auto_failback")]
@@ -57,7 +60,26 @@ fn default_auto_failback() -> bool {
 
 impl Default for FlowFailoverConfig {
     fn default() -> Self {
-        Self { enable: false, auto_failback: true }
+        Self {
+            mode: FlowTargetMode::Weighted,
+            enable: false,
+            auto_failback: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FlowTargetMode {
+    #[default]
+    Weighted,
+    PrimaryBackup,
+}
+
+impl FlowFailoverConfig {
+    pub fn ordered_targets(&self) -> bool {
+        self.enable || self.mode == FlowTargetMode::PrimaryBackup
     }
 }
 
@@ -89,7 +111,7 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
             rule.validate()?;
         }
 
-        if !self.failover.enable
+        if !self.failover.ordered_targets()
             && !self.flow_targets.is_empty()
             && self.flow_targets.iter().all(|t| t.weight == 0)
         {
@@ -103,16 +125,19 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
             });
         }
 
-        if self.failover.enable {
+        if self.failover.ordered_targets() {
             let mut links = std::collections::HashSet::new();
-            if self.flow_targets.len() < 2
+            let min_targets = if self.failover.enable { 2 } else { 1 };
+            if self.flow_targets.len() < min_targets
                 || self.flow_targets.iter().any(|target| match &target.target {
                     FlowTarget::Interface { link_id, .. } => !links.insert(*link_id),
                     FlowTarget::Netns { .. } => true,
                 })
             {
                 return Err(ServiceConfigError::InvalidConfig {
-                    reason: "WAN failover requires at least two distinct WAN links, ordered primary first".into(),
+                    reason: format!(
+                        "WAN primary/backup mode requires at least {min_targets} distinct WAN links, ordered primary first"
+                    ),
                 });
             }
         }

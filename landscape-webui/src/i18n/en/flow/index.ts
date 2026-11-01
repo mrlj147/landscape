@@ -1,8 +1,9 @@
 export default {
   failover: {
+    restore_weighted: "Restore weighted routing mode",
     enable: "Enable WAN failover",
     auto_failback: "Return to primary WAN after recovery",
-    hint: "Order exits from primary to backups. Enable health checks on every WAN first; only healthy exits carry traffic. Disabling failover restores weighted routing. Existing connections may need to reconnect.",
+    hint: "Order exits from primary to backups. Enable health checks on every WAN first; only healthy exits carry traffic. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
     invalid_targets:
       "Failover requires at least two distinct WAN links and does not support container exits.",
     primary: "Primary WAN",

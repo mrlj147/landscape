@@ -56,7 +56,11 @@ function target_label(target: FlowConfig["flow_targets"][number]["target"]) {
           v-for="(each, index) in config.flow_targets"
           :bordered="false"
         >
-          <span v-if="config.failover?.enable"
+          <span
+            v-if="
+              config.failover?.enable ||
+              config.failover?.mode === 'primary_backup'
+            "
             >{{
               index === 0
                 ? t("flow.failover.primary")
@@ -64,7 +68,13 @@ function target_label(target: FlowConfig["flow_targets"][number]["target"]) {
             }}:
           </span>
           {{ frontEndStore.MASK_INFO(target_label(each.target)) }}
-          <span v-if="!config.failover?.enable && (each.weight ?? 1) !== 1">
+          <span
+            v-if="
+              !config.failover?.enable &&
+              config.failover?.mode !== 'primary_backup' &&
+              (each.weight ?? 1) !== 1
+            "
+          >
             ×{{ each.weight ?? 1 }}</span
           >
           <template #icon>
