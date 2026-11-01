@@ -25,7 +25,8 @@ jobs:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked -p landscape-common -p landscape-core -p landscape-database -p migration --lib
-      - run: cargo test --locked -p landscape --lib wan_link_service::
+      - run: |
+          cargo test --locked -p landscape --lib wan_link_service::
       - run: cargo test --locked -p landscape-webserver export_openapi_json
       - uses: actions/setup-node@v6
         with:
