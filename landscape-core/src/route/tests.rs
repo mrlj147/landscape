@@ -601,6 +601,7 @@ fn flow_config(flow_id: u32, enable: bool, targets: Vec<WeightedFlowTarget>) -> 
         id: Uuid::nil(),
         enable,
         flow_id,
+        failover: Default::default(),
         flow_match_rules: vec![],
         flow_targets: targets,
         name: String::new(),

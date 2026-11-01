@@ -44,6 +44,13 @@ export default {
     clamp_value: "钳制值",
   },
   health_check: {
+    method: "探测方式",
+    application_hint:
+      "探测固定使用当前 WAN。HTTP 成功或跳转响应视为正常；DNS 需返回查询域名的 IPv4 地址。HTTP 的 DNS 解析也使用下方指定的上游。",
+    http_url: "探测网址",
+    dns_server: "上游 DNS IPv4 地址",
+    dns_domain: "查询域名",
+
     title: "WAN 链路健康检查",
     targets: "探测目标 (IPv4)",
     targets_tooltip:

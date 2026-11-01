@@ -163,6 +163,7 @@ mod flow_existence_tests {
             id: Uuid::new_v4(),
             enable: true,
             flow_id,
+            failover: Default::default(),
             flow_match_rules: vec![],
             flow_targets: vec![],
             name: String::new(),

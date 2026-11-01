@@ -25,9 +25,10 @@ pub struct FlowConfig {
     pub flow_id: u32,
     /// 匹配规则
     pub flow_match_rules: Vec<FlowEntryRule>,
-    /// 处理流量目标网卡, 目前只取第一个
-    /// 暂定, 可能会移动到具体的网卡上进行设置
+    /// Weighted exits, or primary/backup order when failover is enabled.
     pub flow_targets: Vec<WeightedFlowTarget>,
+    #[serde(default)]
+    pub failover: FlowFailoverConfig,
     /// 名称 (用于展示的简短标识, 为空时回退到 remark)
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(required = false))]
@@ -38,6 +39,26 @@ pub struct FlowConfig {
     #[serde(default = "get_f64_timestamp")]
     #[cfg_attr(feature = "openapi", schema(required = false))]
     pub update_at: f64,
+}
+
+/// Opt-in ordered WAN failover. Disabled preserves weighted routing.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct FlowFailoverConfig {
+    #[serde(default)]
+    pub enable: bool,
+    #[serde(default = "default_auto_failback")]
+    pub auto_failback: bool,
+}
+
+fn default_auto_failback() -> bool {
+    true
+}
+
+impl Default for FlowFailoverConfig {
+    fn default() -> Self {
+        Self { enable: false, auto_failback: true }
+    }
 }
 
 impl LandscapeDBStore<Uuid> for FlowConfig {
@@ -68,7 +89,10 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
             rule.validate()?;
         }
 
-        if !self.flow_targets.is_empty() && self.flow_targets.iter().all(|t| t.weight == 0) {
+        if !self.failover.enable
+            && !self.flow_targets.is_empty()
+            && self.flow_targets.iter().all(|t| t.weight == 0)
+        {
             return Err(ServiceConfigError::InvalidConfig {
                 reason: "flow targets must not all have zero weight".to_string(),
             });
@@ -79,6 +103,19 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
             });
         }
 
+        if self.failover.enable {
+            let mut links = std::collections::HashSet::new();
+            if self.flow_targets.len() < 2
+                || self.flow_targets.iter().any(|target| match &target.target {
+                    FlowTarget::Interface { link_id, .. } => !links.insert(*link_id),
+                    FlowTarget::Netns { .. } => true,
+                })
+            {
+                return Err(ServiceConfigError::InvalidConfig {
+                    reason: "WAN failover requires at least two distinct WAN links, ordered primary first".into(),
+                });
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         for rule in &self.flow_match_rules {
             if !seen.insert(&rule.mode) {
@@ -313,6 +350,7 @@ mod tests {
             id: Uuid::nil(),
             enable: true,
             flow_id: DEFAULT_FLOW_ID,
+            failover: Default::default(),
             flow_match_rules: vec![],
             flow_targets: vec![],
             name: String::new(),
@@ -323,6 +361,33 @@ mod tests {
         let result = crate::database::validator::ValidatableConfig::validate(&config);
 
         assert!(result.is_err(), "flow_id 0 is reserved for the default flow");
+    }
+
+    #[test]
+    fn failover_defaults_and_validation() {
+        use crate::database::validator::ValidatableConfig;
+        let mut config: FlowConfig = serde_json::from_value(serde_json::json!({
+            "enable": true, "flow_id": 1, "flow_match_rules": [],
+            "flow_targets": [], "remark": "legacy"
+        }))
+        .unwrap();
+        assert!(!config.failover.enable);
+        assert!(config.failover.auto_failback);
+        config.failover.enable = true;
+        assert!(config.validate().is_err());
+        let target = |id| {
+            WeightedFlowTarget::new(
+                FlowTarget::Interface { link_id: Uuid::from_u128(id), name: String::new() },
+                0,
+            )
+        };
+        config.flow_targets = vec![target(1), target(1)];
+        assert!(config.validate().is_err());
+        config.flow_targets = vec![target(1), target(2)];
+        assert!(config.validate().is_ok(), "weights are ignored for ordered failover");
+        config.flow_targets[1] =
+            WeightedFlowTarget::new(FlowTarget::Netns { container_name: "proxy".into() }, 1);
+        assert!(config.validate().is_err());
     }
 
     #[test]

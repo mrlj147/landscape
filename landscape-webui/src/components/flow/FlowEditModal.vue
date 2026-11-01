@@ -57,6 +57,7 @@ async function enter() {
     rule.value = flow_config_default();
   }
 
+  rule.value.failover ??= { enable: false, auto_failback: true };
   rule.value.flow_targets = normalizeFlowTargets(rule.value.flow_targets);
 
   rule_json.value = JSON.stringify(rule.value);
@@ -91,6 +92,7 @@ async function saveRule() {
     return;
   }
 
+  rule.value.failover ??= { enable: false, auto_failback: true };
   rule.value.flow_targets = normalizeFlowTargets(rule.value.flow_targets);
 
   if (rule.value.flow_id == -1) {
@@ -104,6 +106,7 @@ async function saveRule() {
   }
 
   if (
+    !rule.value.failover?.enable &&
     rule.value.flow_targets.length > 0 &&
     rule.value.flow_targets.every((target) => (target.weight ?? 1) === 0)
   ) {
@@ -111,6 +114,19 @@ async function saveRule() {
     return;
   }
 
+  if (rule.value.failover?.enable) {
+    const ids = rule.value.flow_targets.map((entry) =>
+      entry.target.t === "interface" ? entry.target.link_id : "",
+    );
+    if (
+      ids.length < 2 ||
+      ids.includes("") ||
+      new Set(ids).size !== ids.length
+    ) {
+      message.warning(t("flow.failover.invalid_targets"));
+      return;
+    }
+  }
   const dup = findDuplicateEntryRules(rule.value.flow_match_rules);
   if (dup) {
     message.warning(t("flow.edit.duplicate_entry_warning", { dup }));
@@ -189,6 +205,21 @@ function normalizeFlowTargets(
         <FlowMatchRule v-model:match_rules="rule.flow_match_rules">
         </FlowMatchRule>
       </n-form-item>
+      <n-form-item v-if="rule.failover" :label="t('flow.failover.enable')">
+        <n-switch v-model:value="rule.failover.enable" />
+      </n-form-item>
+      <n-form-item
+        v-if="rule.failover?.enable"
+        :label="t('flow.failover.auto_failback')"
+      >
+        <n-switch v-model:value="rule.failover.auto_failback" />
+      </n-form-item>
+      <n-alert
+        v-if="rule.failover?.enable"
+        type="info"
+        style="margin-bottom: 16px"
+        >{{ t("flow.failover.hint") }}</n-alert
+      >
       <n-form-item label="">
         <template #label>
           <Notice>
@@ -200,7 +231,10 @@ function normalizeFlowTargets(
           </Notice>
         </template>
 
-        <FlowTargetRule v-model:target_rules="rule.flow_targets">
+        <FlowTargetRule
+          v-model:target_rules="rule.flow_targets"
+          :failover="rule.failover?.enable ?? false"
+        >
         </FlowTargetRule>
       </n-form-item>
     </n-form>

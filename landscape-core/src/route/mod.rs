@@ -44,6 +44,7 @@ pub(crate) type Ipv6LanRoutesByKey = HashMap<LanIPv6RouteKey, LanRouteInfo>;
 
 #[derive(Clone)]
 pub struct IpRouteService {
+    pub(super) failover_selections: Arc<tokio::sync::Mutex<flow_target::FailoverSelections>>,
     pub(crate) dataplane: Arc<dyn RouteTableDataplane>,
     pub(crate) ipv4_wan_ifaces: ShareRwLock<WanRoutesByOwner>,
     pub(crate) ipv6_wan_ifaces: ShareRwLock<WanRoutesByOwner>,
@@ -75,6 +76,7 @@ impl IpRouteService {
     pub fn new(dataplane: Arc<dyn RouteTableDataplane>) -> Self {
         IpRouteService {
             dataplane,
+            failover_selections: Default::default(),
             ipv4_wan_ifaces: Arc::new(RwLock::new(HashMap::new())),
             ipv6_wan_ifaces: Arc::new(RwLock::new(HashMap::new())),
             wan_route_events: broadcast::channel(64).0,

@@ -453,6 +453,23 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             }
         }
 
+        if config.failover.enable {
+            let store = crate::wan_link::repository::WanLinkRepository::new(self.db.clone());
+            for target in &config.flow_targets {
+                if let FlowTarget::Interface { link_id, .. } = target.target {
+                    let link = store
+                        .find_by_id(link_id)
+                        .await
+                        .map_err(landscape_common::service::ServiceConfigError::internal)?;
+                    if !link.is_some_and(|link| link.health_check.enable) {
+                        return Err(landscape_common::service::ServiceConfigError::InvalidConfig {
+                            reason: "enable health checks on every primary/backup WAN before enabling failover".into(),
+                        });
+                    }
+                }
+            }
+        }
+
         let modes: Vec<_> = config.flow_match_rules.iter().map(|r| r.mode.clone()).collect();
 
         self.validate_modes_resolvable(&modes).await.map_err(map_err)?;
@@ -519,6 +536,7 @@ mod wan_link_ref_tests {
             id: Uuid::new_v4(),
             enable: true,
             flow_id: 1,
+            failover: Default::default(),
             flow_match_rules: vec![],
             flow_targets: vec![WeightedFlowTarget::new(
                 FlowTarget::Interface { link_id, name: name.to_string() },
@@ -580,6 +598,7 @@ mod cascade_delete_tests {
             id,
             enable: true,
             flow_id,
+            failover: Default::default(),
             flow_match_rules: vec![],
             flow_targets: vec![],
             name: String::new(),
@@ -650,6 +669,31 @@ mod cascade_delete_tests {
         assert!(provider.dst_ip_rule_store().find_by_flow_id(7).await.unwrap().is_empty());
         assert_eq!(provider.dns_rule_store().find_by_flow_id(8).await.unwrap().len(), 1);
         assert_eq!(provider.dst_ip_rule_store().find_by_flow_id(8).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn persists_failover_settings_and_exit_order() {
+        use landscape_common::flow::{FlowFailoverConfig, FlowTarget, WeightedFlowTarget};
+        let provider = LandscapeDBServiceProvider::mem_test_db().await;
+        let id = Uuid::new_v4();
+        let mut config = flow(id, 7);
+        config.failover = FlowFailoverConfig { enable: true, auto_failback: false };
+        config.flow_targets = [2, 1]
+            .into_iter()
+            .map(|id| {
+                WeightedFlowTarget::new(
+                    FlowTarget::Interface { link_id: Uuid::from_u128(id), name: String::new() },
+                    1,
+                )
+            })
+            .collect();
+        provider.flow_rule_store().upsert(config.clone()).await.unwrap();
+        let loaded = provider.flow_rule_store().find_by_id(id).await.unwrap().unwrap();
+        assert_eq!(loaded.failover, config.failover);
+        assert_eq!(
+            serde_json::to_value(loaded.flow_targets).unwrap(),
+            serde_json::to_value(config.flow_targets).unwrap()
+        );
     }
 
     #[tokio::test]

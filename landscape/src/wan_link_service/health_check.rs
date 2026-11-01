@@ -59,7 +59,11 @@ pub(super) async fn run(
         return;
     };
 
-    let RuntimeWanHealthProbe::Icmp { targets, probe_gateway } = config.probe;
+    let targets = match &config.probe {
+        RuntimeWanHealthProbe::Icmp { targets, .. } => targets.clone(),
+        RuntimeWanHealthProbe::Dns { server, .. } => vec![*server],
+        RuntimeWanHealthProbe::Http { dns_server, .. } => vec![*dns_server],
+    };
     let mut evaluator = HealthEvaluator::new(
         link_id,
         config.failure_threshold,
@@ -93,14 +97,29 @@ pub(super) async fn run(
         tokio::select! {
             _ = stop.cancelled() => break,
             _ = ticker.tick() => {
+                let probe_gateway = matches!(&config.probe, RuntimeWanHealthProbe::Icmp { probe_gateway: true, .. });
                 let round_targets =
                     round_targets(&route_service, link_id, &targets, probe_gateway).await;
                 if round_targets.is_empty() {
                     continue;
                 }
-                match probe_round(&probe, &iface.iface_name, src, &round_targets, config.timeout_ms)
-                    .await
-                {
+                let round = async {
+                    match &config.probe {
+                        RuntimeWanHealthProbe::Icmp { .. } => probe_round(&probe, &iface.iface_name, src, &round_targets, config.timeout_ms).await,
+                        method => match super::application_probe::probe(&iface.iface_name, src, method, Duration::from_millis(config.timeout_ms.into())).await {
+                            Ok(rtt) => RoundOutcome::Evidence(vec![TargetProbe { target: round_targets[0], rtt }]),
+                            Err(error) => {
+                                tracing::warn!(%link_id, %error, "application health probe failed locally");
+                                RoundOutcome::Blind { errored: 1 }
+                            }
+                        },
+                    }
+                };
+                let outcome = tokio::select! {
+                    _ = stop.cancelled() => break,
+                    outcome = round => outcome,
+                };
+                match outcome {
                     RoundOutcome::Evidence(results) => {
                         blind_rounds = 0;
                         if let Some(transition) = evaluator.apply_round(&results) {

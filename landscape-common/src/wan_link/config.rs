@@ -278,12 +278,25 @@ pub struct WanLinkHealthCheckConfig {
 }
 
 /// Probe method of a health check; each variant owns its target
-/// representation. v1 implements ICMP only; further methods land as new
+/// representation. ICMP, DNS and HTTP are supported as separate
 /// (purely additive) variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum WanHealthProbeConfig {
+    /// Resolve an A record through this WAN's chosen IPv4 DNS server.
+    Dns {
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        server: std::net::Ipv4Addr,
+        domain: String,
+    },
+    /// HTTP(S) GET, including DNS resolution, confined to this WAN.
+    Http {
+        url: String,
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        dns_server: std::net::Ipv4Addr,
+    },
+
     /// ICMP echo bound to the section iface and source address.
     Icmp {
         /// Probe targets; v1 accepts IPv4 only. Empty means only the
@@ -302,6 +315,19 @@ impl Default for WanHealthProbeConfig {
     fn default() -> Self {
         Self::Icmp { targets: Vec::new(), probe_gateway: false }
     }
+}
+
+fn validate_health_dns_server(server: std::net::Ipv4Addr) -> Result<(), ServiceConfigError> {
+    if server.is_unspecified()
+        || server.is_loopback()
+        || server.is_multicast()
+        || server.is_broadcast()
+    {
+        return Err(ServiceConfigError::InvalidConfig {
+            reason: "health_check requires a unicast upstream IPv4 DNS server".into(),
+        });
+    }
+    Ok(())
 }
 
 impl ZoneAwareConfig for WanLinkConfig {
@@ -405,25 +431,55 @@ impl ValidatableConfig for WanLinkConfig {
         validate_nat_range("icmp_in_range", &self.nat.icmp_in_range)?;
 
         let health = &self.health_check;
-        let WanHealthProbeConfig::Icmp { targets, probe_gateway } = &health.probe;
-        if targets.iter().any(|target| !target.is_ipv4()) {
-            return Err(ServiceConfigError::InvalidConfig {
-                reason: "health_check icmp targets must be IPv4 addresses".to_string(),
-            });
-        }
-        if health.enable && targets.is_empty() && !*probe_gateway {
-            return Err(ServiceConfigError::InvalidConfig {
+        let target_count = match &health.probe {
+            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
+                if targets.iter().any(|target| !target.is_ipv4()) {
+                    return Err(ServiceConfigError::InvalidConfig {
+                        reason: "health_check icmp targets must be IPv4 addresses".to_string(),
+                    });
+                }
+                if health.enable && targets.is_empty() && !*probe_gateway {
+                    return Err(ServiceConfigError::InvalidConfig {
                 reason: "health_check enabled but nothing to probe: set targets or probe_gateway"
                     .to_string(),
             });
-        }
-        if targets.len() > MAX_HEALTH_TARGETS {
-            return Err(ServiceConfigError::InvalidConfig {
-                reason: format!(
-                    "health_check icmp targets exceed the maximum of {MAX_HEALTH_TARGETS}"
-                ),
-            });
-        }
+                }
+                if targets.len() > MAX_HEALTH_TARGETS {
+                    return Err(ServiceConfigError::InvalidConfig {
+                        reason: format!(
+                            "health_check icmp targets exceed the maximum of {MAX_HEALTH_TARGETS}"
+                        ),
+                    });
+                }
+                targets.len() + usize::from(*probe_gateway)
+            }
+            WanHealthProbeConfig::Dns { server, domain } => {
+                validate_health_dns_server(*server)?;
+                if domain.trim().is_empty() || hickory_proto::rr::Name::from_ascii(domain).is_err()
+                {
+                    return Err(ServiceConfigError::InvalidConfig {
+                        reason: "health_check DNS domain is invalid".into(),
+                    });
+                }
+                1
+            }
+            WanHealthProbeConfig::Http { url, dns_server } => {
+                validate_health_dns_server(*dns_server)?;
+                let valid = url::Url::parse(url).is_ok_and(|url| {
+                    matches!(url.scheme(), "http" | "https")
+                        && url.host_str().is_some()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && !matches!(url.host(), Some(url::Host::Ipv6(_)))
+                });
+                if !valid {
+                    return Err(ServiceConfigError::InvalidConfig {
+                        reason: "health_check URL must be an absolute HTTP(S) URL".into(),
+                    });
+                }
+                1
+            }
+        };
         if let Some(reliability) = health.reliability {
             if !(1..=100).contains(&reliability) {
                 return Err(ServiceConfigError::InvalidConfig {
@@ -432,7 +488,6 @@ impl ValidatableConfig for WanLinkConfig {
                     ),
                 });
             }
-            let target_count = targets.len() + usize::from(*probe_gateway);
             if target_count > 0 && reliability as usize > target_count {
                 return Err(ServiceConfigError::InvalidConfig {
                     reason: format!(
@@ -528,6 +583,36 @@ mod tests {
         assert!(config.validate().is_ok());
         config.link_chain_id = LINK_CHAIN_ID_MAX + 1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn application_health_probe_validation() {
+        let mut config = minimal();
+        config.health_check.enable = true;
+        config.health_check.probe = WanHealthProbeConfig::Dns {
+            server: "223.5.5.5".parse().unwrap(),
+            domain: "www.baidu.com".into(),
+        };
+        assert!(config.validate().is_ok());
+        config.health_check.reliability = Some(2);
+        assert!(config.validate().is_err(), "single application probe has reliability one");
+        config.health_check.reliability = Some(1);
+        for url in ["https://www.baidu.com", "http://example.com/health"] {
+            config.health_check.probe = WanHealthProbeConfig::Http {
+                url: url.into(),
+                dns_server: "223.5.5.5".parse().unwrap(),
+            };
+            assert!(config.validate().is_ok());
+        }
+        for url in
+            ["file:///etc/passwd", "https://", "http://[::1]", "http://user:password@example.com"]
+        {
+            config.health_check.probe = WanHealthProbeConfig::Http {
+                url: url.into(),
+                dns_server: "223.5.5.5".parse().unwrap(),
+            };
+            assert!(config.validate().is_err(), "invalid probe URL: {url}");
+        }
     }
 
     #[test]

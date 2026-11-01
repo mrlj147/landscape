@@ -26,7 +26,10 @@ export const MAX_HEALTH_TARGETS = 4;
 
 export type HealthCheckConfig = {
   enable: boolean;
-  probe: { t: "icmp"; targets: string[]; probe_gateway: boolean };
+  probe:
+    | { t: "icmp"; targets: string[]; probe_gateway: boolean }
+    | { t: "dns"; server: string; domain: string }
+    | { t: "http"; url: string; dns_server: string };
   interval_secs: number;
   timeout_ms: number;
   failure_threshold: number;
@@ -212,6 +215,10 @@ function health_check_from_raw(raw_section: unknown): HealthCheckConfig {
         enable?: boolean;
         probe?: {
           t?: string;
+          server?: string;
+          domain?: string;
+          url?: string;
+          dns_server?: string;
           targets?: string[] | null;
           probe_gateway?: boolean;
         };
@@ -228,14 +235,24 @@ function health_check_from_raw(raw_section: unknown): HealthCheckConfig {
   }
   return {
     enable: section.enable ?? false,
-    probe: {
-      t: "icmp",
-      targets: section.probe?.t === "icmp" ? (section.probe.targets ?? []) : [],
-      probe_gateway:
-        section.probe?.t === "icmp"
-          ? (section.probe.probe_gateway ?? false)
-          : false,
-    },
+    probe:
+      section.probe?.t === "dns"
+        ? {
+            t: "dns",
+            server: section.probe.server ?? "223.5.5.5",
+            domain: section.probe.domain ?? "www.baidu.com",
+          }
+        : section.probe?.t === "http"
+          ? {
+              t: "http",
+              url: section.probe.url ?? "https://www.baidu.com",
+              dns_server: section.probe.dns_server ?? "223.5.5.5",
+            }
+          : {
+              t: "icmp",
+              targets: section.probe?.targets ?? [],
+              probe_gateway: section.probe?.probe_gateway ?? false,
+            },
     interval_secs: section.interval_secs ?? DEFAULT_HEALTH_INTERVAL_SECS,
     timeout_ms: section.timeout_ms ?? DEFAULT_HEALTH_TIMEOUT_MS,
     failure_threshold:

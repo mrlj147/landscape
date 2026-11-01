@@ -24,6 +24,7 @@ pub struct FlowRuleService {
     dns_events_tx: mpsc::Sender<DnsEvent>,
     route_service: IpRouteService,
     dataplane: Arc<dyn FlowRuleDataplane>,
+    target_sync: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl FlowRuleService {
@@ -35,11 +36,18 @@ impl FlowRuleService {
         dataplane: Arc<dyn FlowRuleDataplane>,
     ) -> Self {
         let store = store_provider.flow_rule_store();
-        let result = Self { store, dns_events_tx, route_service, dataplane };
+        let result = Self {
+            store,
+            dns_events_tx,
+            route_service,
+            dataplane,
+            target_sync: Default::default(),
+        };
         // Subscribe before the initial sync so no WanRouteEvent can slip in
         // between the sync and the subscription; events arriving during the
         // sync only trigger a redundant, idempotent resync.
         let wan_route_events = result.route_service.subscribe_wan_route_events();
+        let health_events = result.route_service.subscribe_health_events();
         result.refresh_flow_matches().await;
         result.sync_all_flow_wan_targets().await;
 
@@ -57,8 +65,13 @@ impl FlowRuleService {
         let this = result.clone();
         spawn_task(task_label::task::FLOW_WAN_ROUTE_OBSERVER, async move {
             let mut events = wan_route_events;
+            let mut health_events = health_events;
             loop {
-                match events.recv().await {
+                let event = tokio::select! {
+                    event = events.recv() => event.map(|_| ()),
+                    event = health_events.recv() => event.map(|_| ()),
+                };
+                match event {
                     Ok(_) => this.sync_all_flow_wan_targets().await,
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
                         tracing::warn!("flow wan route observer missed {missed} events; resyncing");
@@ -87,6 +100,7 @@ impl FlowRuleService {
     /// Recompute every flow's WAN target slots from the current store
     /// contents against the route service's WAN state.
     async fn sync_all_flow_wan_targets(&self) {
+        let _guard = self.target_sync.lock().await;
         let configs = self.store.list().await.unwrap_or_else(|error| {
             tracing::error!("failed to load flow configs for wan target sync: {error:?}");
             Vec::new()
@@ -147,12 +161,19 @@ impl ConfigStoreController for FlowRuleService {
 
     async fn notify_changed(&self, changes: Vec<Change<Self::Config>>) {
         self.refresh_flow_matches().await;
-        let configs: Vec<FlowConfig> = changes.into_iter().map(|change| change.new).collect();
-        self.route_service.sync_flow_wan_targets(&configs).await;
+        for change in &changes {
+            if let Some(old) = &change.old
+                && old.flow_id != change.new.flow_id
+            {
+                self.route_service.clear_flow_wan_targets(old.flow_id).await;
+            }
+        }
+        self.sync_all_flow_wan_targets().await;
     }
 
     async fn notify_deleted(&self, old: Self::Config) {
         self.refresh_flow_matches().await;
-        self.route_service.clear_flow_wan_targets(old.flow_id);
+        let _guard = self.target_sync.lock().await;
+        self.route_service.clear_flow_wan_targets(old.flow_id).await;
     }
 }

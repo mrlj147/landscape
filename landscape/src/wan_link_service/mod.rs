@@ -1,3 +1,4 @@
+mod application_probe;
 mod firewall;
 mod health_check;
 mod mss;
@@ -517,8 +518,13 @@ impl ServiceStarterTrait for WanLinkService {
 
 /// Health check needs something to probe: explicit targets or the gateway.
 fn health_check_enabled(cfg: &WanLinkConfig) -> bool {
-    let WanHealthProbeConfig::Icmp { targets, probe_gateway } = &cfg.health_check.probe;
-    cfg.health_check.enable && (!targets.is_empty() || *probe_gateway)
+    cfg.health_check.enable
+        && match &cfg.health_check.probe {
+            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
+                !targets.is_empty() || *probe_gateway
+            }
+            WanHealthProbeConfig::Dns { .. } | WanHealthProbeConfig::Http { .. } => true,
+        }
 }
 
 impl WanLinkService {

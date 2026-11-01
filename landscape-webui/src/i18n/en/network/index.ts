@@ -45,6 +45,13 @@ export default {
     clamp_value: "Clamp Value",
   },
   health_check: {
+    method: "Probe method",
+    application_hint:
+      "Probes stay on this WAN. HTTP success/redirect responses pass; DNS must return IPv4 answers. HTTP resolution also uses the specified upstream DNS server.",
+    http_url: "Probe URL",
+    dns_server: "Upstream DNS IPv4 address",
+    dns_domain: "Query domain",
+
     title: "WAN Link Health Check",
     targets: "Probe Targets (IPv4)",
     targets_tooltip:

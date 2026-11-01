@@ -1,4 +1,14 @@
 export default {
+  failover: {
+    enable: "启用 WAN 主备切换",
+    auto_failback: "主 WAN 恢复后自动切回",
+    hint: "出口从上到下依次为主 WAN、备用 WAN。请先启用每条 WAN 的健康检测；只有检测正常的出口才会承接流量。关闭后恢复原权重分流。切换时已有连接可能需要重连。",
+    invalid_targets: "主备切换至少需要两条不同的 WAN，不能选择容器出口。",
+    primary: "主 WAN",
+    backup: "备用 WAN {index}",
+    move_up: "提高优先级",
+    move_down: "降低优先级",
+  },
   default_card: {
     title: "默认 Flow",
     target_ip: "目标 IP",

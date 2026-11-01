@@ -12,6 +12,8 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 /// A timed-out or unanswered probe is `Ok(None)`, never an error.
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
+    #[error("probe configuration: {0}")]
+    Config(String),
     #[error("icmp socket: {0}")]
     Socket(#[from] std::io::Error),
     #[error("probe task failed: {0}")]
@@ -66,7 +68,15 @@ fn icmp_ping_blocking(
 
     let start = Instant::now();
     let dest = SockAddr::from(SocketAddr::from((target, 0)));
-    socket.send_to(&request, &dest)?;
+    if let Err(error) = socket.send_to(&request, &dest) {
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::ENETUNREACH | libc::EHOSTUNREACH | libc::ENETDOWN)
+        ) {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
 
     let mut buf = [std::mem::MaybeUninit::<u8>::new(0); 1500];
     loop {

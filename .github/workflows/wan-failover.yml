@@ -1,0 +1,41 @@
+name: WAN failover tests
+on:
+  push:
+    branches: ['codex/multi-wan-failover']
+  pull_request:
+    paths:
+      - 'landscape-common/src/flow/**'
+      - 'landscape-common/src/wan_link/**'
+      - 'landscape-core/src/route/**'
+      - 'landscape/src/flow/**'
+      - 'landscape/src/wan_link_service/**'
+      - 'landscape-webui/src/components/flow/**'
+      - 'landscape-webui/src/components/health_check/**'
+      - '.github/workflows/wan-failover.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/setup_ubuntu_build.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p landscape-common -p landscape-core -p landscape-database -p migration --lib
+      - run: cargo test --locked -p landscape --lib wan_link_service::
+      - run: cargo test --locked -p landscape-webserver export_openapi_json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: corepack enable && corepack pnpm install --frozen-lockfile --ignore-scripts
+      - run: corepack pnpm --filter @landscape-router/types generate
+      - run: corepack pnpm --filter landscape-webui test && corepack pnpm --filter landscape-webui build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wan-failover-validation
+          path: |
+            landscape-types/openapi.json
+            landscape-webui/dist
