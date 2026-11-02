@@ -80,6 +80,20 @@ impl FlowConfigRepository {
                 return Ok::<_, crate::writer::UpsertErr>(None);
             };
             let flow_id = model.flow_id;
+            let upstreams =
+                crate::dns_upstream::entity::DnsUpstreamConfigEntity::find().all(txn).await?;
+            if upstreams.iter().any(|upstream| {
+                upstream.bind_config["follow_flow"].as_u64() == Some(u64::from(flow_id))
+            }) {
+                return Err(crate::writer::UpsertErr::Database(DbError::Validation(
+                    landscape_common::service::ServiceConfigError::InvalidConfig {
+                        reason:
+                            "change DNS upstream WAN bindings before deleting their followed flow"
+                                .into(),
+                    },
+                )));
+            }
+
             DNSRuleConfigEntity::delete_many()
                 .filter(DNSRuleConfigColumn::FlowId.eq(flow_id))
                 .exec(txn)
@@ -432,6 +446,27 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             landscape_common::service::ServiceConfigError::InvalidConfig { reason: e.to_string() }
         }
 
+        if let Some(previous) = self
+            .find_by_id(config.id)
+            .await
+            .map_err(landscape_common::service::ServiceConfigError::internal)?
+            && (!config.enable
+                || !config.failover.ordered_targets()
+                || previous.flow_id != config.flow_id)
+        {
+            let upstreams =
+                crate::dns_upstream::repository::DnsUpstreamRepository::new(self.db.clone())
+                    .list()
+                    .await
+                    .map_err(landscape_common::service::ServiceConfigError::internal)?;
+            if upstreams
+                .iter()
+                .any(|upstream| upstream.bind_config.follow_flow == Some(previous.flow_id))
+            {
+                return Err(landscape_common::service::ServiceConfigError::InvalidConfig { reason: "change DNS upstream WAN bindings before disabling, renumbering or leaving primary/backup mode on their followed flow".into() });
+            }
+        }
+
         if config.enable && config.failover.bind_default_flow {
             let configs = self
                 .list()
@@ -566,6 +601,31 @@ mod wan_link_ref_tests {
         let id = Uuid::new_v4();
         provider.wan_link_store().upsert(link(id, "eth1", pppd("ppp0"))).await.unwrap();
         (provider, id)
+    }
+
+    #[tokio::test]
+    async fn followed_dns_flow_cannot_be_disabled_renumbered_or_deleted() {
+        use landscape_common::database::validator::StoreValidator;
+        let (provider, link_id) = setup().await;
+        let mut flow = flow_config(link_id, "ppp0");
+        flow.failover.mode = landscape_common::flow::FlowTargetMode::PrimaryBackup;
+        provider.flow_rule_store().upsert(flow.clone()).await.unwrap();
+        let mut upstream = landscape_common::dns::config::DnsUpstreamConfig::default();
+        upstream.bind_config.follow_flow = Some(flow.flow_id);
+        provider.dns_upstream_config_store().checked_upsert(upstream.clone()).await.unwrap();
+        flow.enable = false;
+        assert!(provider.flow_rule_store().validate_cross(&mut flow).await.is_err());
+        flow.enable = true;
+        flow.flow_id = 2;
+        assert!(provider.flow_rule_store().validate_cross(&mut flow).await.is_err());
+        flow.flow_id = 1;
+        assert!(provider.flow_rule_store().validate_cross(&mut flow).await.is_ok());
+        assert!(provider.flow_rule_store().delete_flow_with_rules(flow.id).await.is_err());
+        upstream.bind_config.follow_flow = None;
+        provider.dns_upstream_config_store().upsert(upstream).await.unwrap();
+        assert!(
+            provider.flow_rule_store().delete_flow_with_rules(flow.id).await.unwrap().is_some()
+        );
     }
 
     #[tokio::test]

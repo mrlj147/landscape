@@ -77,6 +77,13 @@ function setProbeMethod(method: "icmp" | "http" | "dns" | "multi") {
                 { t: "dns", server: "223.5.5.5", domain: "www.baidu.com" },
               ],
             },
+            {
+              name: "IPv6 DNS",
+              quorum: 1,
+              targets: [
+                { t: "dns", server: "2400:3200::1", domain: "www.baidu.com" },
+              ],
+            },
           ],
         }
       : method === "icmp"

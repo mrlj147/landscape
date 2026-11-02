@@ -44,15 +44,16 @@ export default {
     clamp_value: "钳制值",
   },
   health_check: {
+    dns_ip: "上游 DNS IPv4 / IPv6 地址",
     multi: "多目标 / IPv4 + IPv6",
     multi_hint:
-      "组内达到成功数量门槛才通过；同一地址族的所有组都必须通过。IPv4 与 IPv6 分组检测、独立切换。每组目标使用同一地址族。",
+      "组内达到成功数量门槛才通过；同一地址族的所有组都必须通过。IPv4 与 IPv6 分组检测、独立切换。每组目标使用同一地址族。未配置探测的地址族保持未知，宽限结束后默认停用该地址族出口。",
     group_name: "分组名称",
     quorum: "至少成功的目标数",
 
     method: "探测方式",
     application_hint:
-      "探测固定使用当前 WAN。HTTP 成功或跳转响应视为正常；DNS 需返回查询域名的 IPv4 地址。HTTP 的 DNS 解析也使用下方指定的上游。",
+      "探测固定使用当前 WAN。HTTP 成功或跳转响应视为正常；DNS 需返回与探测地址族一致的 A / AAAA 记录。HTTP 的 DNS 解析也使用下方指定的上游。",
     http_url: "探测网址",
     dns_server: "上游 DNS IPv4 地址",
     dns_domain: "查询域名",

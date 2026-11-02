@@ -28,6 +28,8 @@ jobs:
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: State, configuration and migration tests
         run: |
           cargo test --locked -p landscape-common -p landscape-core -p landscape-database -p migration --lib > "$RUNNER_TEMP/wan-state.log" 2>&1 || { tail -100 "$RUNNER_TEMP/wan-state.log"; exit 1; }
@@ -44,13 +46,16 @@ jobs:
           sudo env LANDSCAPE_PRIVILEGED_CI=1 timeout 300 "$dns_test_bin" --test-threads=2
       - run: cargo test --locked -p landscape-webserver export_openapi_json
       - name: Compile isolated network tests
+        if: ${{ !cancelled() }}
         run: cargo test --locked -p landscape-ebpf --features test-route,test-chain --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
       - name: Real WAN failover packets in netns/veth
+        if: ${{ !cancelled() }}
         run: |
           wan_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_ebpf" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-ebpf-build.json" | tail -1)
           test -n "$wan_test_bin"
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::chain::wan_failover:: --ignored --test-threads=1 --nocapture
       - name: Existing routing regression tests
+        if: ${{ !cancelled() }}
         run: |
           wan_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_ebpf" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-ebpf-build.json" | tail -1)
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::route:: --test-threads=1

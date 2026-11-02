@@ -103,7 +103,7 @@ function changeKind(
       <template v-if="probe.t === 'dns'">
         <n-input
           v-model:value="probe.server"
-          :placeholder="t('network.health_check.dns_server')"
+          :placeholder="t('network.health_check.dns_ip')"
         />
         <n-input
           v-model:value="probe.domain"
@@ -118,7 +118,7 @@ function changeKind(
         />
         <n-input
           v-model:value="probe.dns_server"
-          :placeholder="t('network.health_check.dns_server')"
+          :placeholder="t('network.health_check.dns_ip')"
           style="margin-top: 8px"
         />
       </template>

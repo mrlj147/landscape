@@ -4,7 +4,7 @@ import socket
 import struct
 
 selector = selectors.DefaultSelector()
-for family, address in [(socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")]:
+for family, address in [(socket.AF_INET, "198.19.0.53"), (socket.AF_INET6, "fd53::53")]:
     for kind, port in [(socket.SOCK_DGRAM, 53), (socket.SOCK_STREAM, 18080)]:
         sock = socket.socket(family, kind)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

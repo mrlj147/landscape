@@ -45,9 +45,10 @@ export default {
     clamp_value: "Clamp Value",
   },
   health_check: {
+    dns_ip: "Upstream DNS IPv4 / IPv6 address",
     multi: "Multiple targets / IPv4 + IPv6",
     multi_hint:
-      "Each group must meet its quorum. All groups within an address family must pass. IPv4 and IPv6 are evaluated and switched independently. Use one address family per group.",
+      "Each group must meet its quorum. All groups within an address family must pass. IPv4 and IPv6 are evaluated and switched independently. Use one address family per group. An unprobed family stays Unknown and its exit is disabled after grace unless unknown fail-open is enabled.",
     group_name: "Group name",
     quorum: "Required successful targets",
 
