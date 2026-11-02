@@ -696,6 +696,33 @@ mod tests {
     }
 
     #[test]
+    fn multi_probe_validates_quorum_and_address_family() {
+        let mut config = minimal();
+        config.health_check.enable = true;
+        let v4 = WanProbeTarget::Dns {
+            server: "223.5.5.5".parse().unwrap(),
+            domain: "www.baidu.com".into(),
+        };
+        let v6 = WanProbeTarget::Icmp { address: "2400:3200::1".parse().unwrap() };
+        let group = |targets, quorum| WanProbeGroup { name: "test".into(), targets, quorum };
+        config.health_check.probe = WanHealthProbeConfig::Multi {
+            groups: vec![group(vec![v4.clone()], 1), group(vec![v6.clone()], 1)],
+        };
+        assert!(config.validate().is_ok(), "separate IPv4 and IPv6 groups are valid");
+        for groups in [
+            vec![],
+            vec![group(vec![], 1)],
+            vec![group(vec![v4.clone()], 0)],
+            vec![group(vec![v4.clone()], 2)],
+            vec![group(vec![v4.clone(), v4.clone()], 1)],
+            vec![group(vec![v4, v6], 1)],
+        ] {
+            config.health_check.probe = WanHealthProbeConfig::Multi { groups };
+            assert!(config.validate().is_err(), "reject impossible or ambiguous group");
+        }
+    }
+
+    #[test]
     fn application_health_probe_validation() {
         let mut config = minimal();
         config.health_check.enable = true;
