@@ -233,6 +233,21 @@ impl DNSResolveRuntime {
                         );
                         return Err(DnsServiceError::Protocol(no_records.response_code));
                     }
+                    hickory_resolver::net::NetError::Dns(
+                        hickory_resolver::net::DnsError::ResponseCode(code),
+                    ) => {
+                        tracing::warn!(flow_id = self.flow_id, rule_id = %self.rule_id,
+                            domain, response_code = ?code, "upstream answered an error code");
+                        return Err(DnsServiceError::Protocol(*code));
+                    }
+                    hickory_resolver::net::NetError::Io(error) => {
+                        tracing::error!(flow_id = self.flow_id, rule_id = %self.rule_id,
+                            domain, %error, "DNS upstream network failure");
+                        return Err(DnsServiceError::Io(std::io::Error::new(
+                            error.kind(),
+                            error.to_string(),
+                        )));
+                    }
                     hickory_resolver::net::NetError::Timeout => {
                         return Err(DnsServiceError::Timeout);
                     }

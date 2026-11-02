@@ -419,6 +419,11 @@ mod tests {
                         Some(DnsCheckError::UpstreamResponse),
                         Some(5),
                     ),
+                    (
+                        ScriptedAction::Code(ResponseCode::ServFail),
+                        Some(DnsCheckError::UpstreamResponse),
+                        Some(2),
+                    ),
                     (ScriptedAction::Code(ResponseCode::NXDomain), None, Some(3)),
                     (ScriptedAction::Code(ResponseCode::NoError), None, Some(0)),
                 ] {
