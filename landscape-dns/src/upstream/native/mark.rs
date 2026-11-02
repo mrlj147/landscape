@@ -267,6 +267,7 @@ mod tests {
                 resolved_wan: Some(DnsWanBinding {
                     ipv4: Some(("lo".into(), Ipv4Addr::LOCALHOST)),
                     ipv6: Some(("lo".into(), Ipv6Addr::LOCALHOST)),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

@@ -62,6 +62,12 @@ export default {
     err_match_rules_required: "至少需要添加一条匹配域名规则",
   },
   upstream_edit: {
+    wan_servers: "按 WAN 使用独立 DNS",
+    wan_select: "选择 WAN",
+    wan_servers_hint:
+      "为每条 WAN 填写对应运营商的 DNS。切换出口时同时切换 DNS 地址和连接；当前 WAN 未配置时解析失败，不会使用其他运营商或公共 DNS。IPv4 DNS 也可以解析 IPv6 记录。所有组使用下方相同的协议和端口。",
+    wan_servers_invalid: "每条 WAN 只能配置一次，且至少填写一个有效 DNS 地址。",
+
     follow_flow: "DNS 上游跟随出口",
     follow_flow_off: "保持原有路由 / 固定源地址",
     default_flow: "默认 Flow (0)",

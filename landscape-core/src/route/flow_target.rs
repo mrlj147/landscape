@@ -398,39 +398,43 @@ impl IpRouteService {
         flow_id: u32,
     ) -> landscape_common::dns::bind::DnsWanBinding {
         let selections = self.failover_selections.lock().await;
-        let get = |ipv6| {
-            selections
-                .published
-                .get(&(flow_id, ipv6))
-                .filter(|targets| targets.len() == 1)
-                .and_then(|targets| targets.first())
-                .map(|(route, _)| route.info.clone())
+        let ipv4_routes = self.clone_ipv4_wan_infos().await;
+        let ipv6_routes = self.clone_ipv6_wan_infos().await;
+        let get = |ipv6, routes: &WanRoutesByOwner| {
+            let route = if flow_id == 0 && selections.default_owner.is_none() {
+                routes.values().find(|r| r.info.default_route)
+            } else {
+                selections
+                    .published
+                    .get(&(flow_id, ipv6))
+                    .filter(|targets| targets.len() == 1)
+                    .and_then(|targets| targets.first())
+                    .map(|(route, _)| route)
+            }?;
+            let link_id = routes.iter().find_map(|(owner, current)| {
+                if current != route {
+                    return None;
+                }
+                match owner {
+                    RouteOwner::Link(id) => Some(*id),
+                    RouteOwner::Netns(_) => None,
+                }
+            });
+            Some((route.info.clone(), link_id))
         };
-        let mut v4 = get(false);
-        let mut v6 = get(true);
-        if flow_id == 0 && selections.default_owner.is_none() {
-            v4 = self
-                .clone_ipv4_wan_infos()
-                .await
-                .values()
-                .find(|r| r.info.default_route)
-                .map(|r| r.info.clone());
-            v6 = self
-                .clone_ipv6_wan_infos()
-                .await
-                .values()
-                .find(|r| r.info.default_route)
-                .map(|r| r.info.clone());
-        }
+        let v4 = get(false, &ipv4_routes).and_then(|(r, id)| match r.iface_ip {
+            std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Some(((r.iface_name, ip), id)),
+            _ => None,
+        });
+        let v6 = get(true, &ipv6_routes).and_then(|(r, id)| match r.iface_ip {
+            std::net::IpAddr::V6(ip) if !ip.is_unspecified() => Some(((r.iface_name, ip), id)),
+            _ => None,
+        });
         landscape_common::dns::bind::DnsWanBinding {
-            ipv4: v4.and_then(|r| match r.iface_ip {
-                std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Some((r.iface_name, ip)),
-                _ => None,
-            }),
-            ipv6: v6.and_then(|r| match r.iface_ip {
-                std::net::IpAddr::V6(ip) if !ip.is_unspecified() => Some((r.iface_name, ip)),
-                _ => None,
-            }),
+            ipv4_link_id: v4.as_ref().and_then(|(_, id)| *id),
+            ipv6_link_id: v6.as_ref().and_then(|(_, id)| *id),
+            ipv4: v4.map(|(address, _)| address),
+            ipv6: v6.map(|(address, _)| address),
         }
     }
 
@@ -614,6 +618,7 @@ mod failover_tests {
         let status = service.get_flow_wan_statuses().await;
         assert!(status.iter().filter(|s| !s.ipv6).all(|s| s.active_link_id == Some(backup)));
         assert_eq!(service.dns_wan_binding(0).await.ipv4.unwrap().0, "wan2");
+        assert_eq!(service.dns_wan_binding(0).await.ipv4_link_id, Some(backup));
         let mut restored = HealthEvaluator::new(primary, 1, 1, 1).info().clone();
         restored.state = WanLinkHealthState::Healthy;
         service.update_link_health(restored).await;
@@ -631,11 +636,13 @@ mod failover_tests {
             "wan1",
             "manual mode takes precedence"
         );
+        assert_eq!(service.dns_wan_binding(0).await.ipv4_link_id, Some(primary));
         config.failover.bind_default_flow = false;
         config.failover.bind_router_traffic = false;
         service.sync_flow_wan_targets(&[config]).await;
         assert!(service.get_flow_wan_statuses().await.iter().all(|s| s.flow_id != 0));
         assert!(service.router_wan_policy.read().await.is_none());
+        assert_eq!(service.dns_wan_binding(0).await.ipv4_link_id, Some(primary));
     }
 
     #[tokio::test]

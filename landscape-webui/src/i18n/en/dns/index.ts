@@ -64,6 +64,13 @@ export default {
     err_match_rules_required: "At least one domain match rule is required",
   },
   upstream_edit: {
+    wan_servers: "Separate DNS servers for each WAN",
+    wan_select: "Select WAN",
+    wan_servers_hint:
+      "Enter each carrier’s DNS servers. WAN changes switch both destination servers and socket bindings. Missing servers fail closed, without another carrier or public DNS fallback. IPv4 DNS servers can also resolve AAAA records. All groups share the protocol and port below.",
+    wan_servers_invalid:
+      "Choose each WAN only once and enter at least one valid DNS IP for every group.",
+
     follow_flow: "Follow WAN selection",
     follow_flow_off: "Existing routing / fixed source address",
     default_flow: "Default Flow (0)",

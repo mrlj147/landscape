@@ -94,6 +94,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn carrier_dns_switches_destination_and_pool_then_recovers() {
+        use hickory_proto::{
+            op::{Message, OpCode},
+            rr::{RData, Record, RecordType, rdata::A},
+        };
+        use landscape_common::dns::bind::{DnsWanBinding, DnsWanServers};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        if std::env::var("LANDSCAPE_PRIVILEGED_CI").as_deref() != Ok("1") {
+            return;
+        }
+        let cu_socket = tokio::net::UdpSocket::bind("127.0.0.2:0").await.unwrap();
+        let port = cu_socket.local_addr().unwrap().port();
+        let ct_socket = tokio::net::UdpSocket::bind(("127.0.0.3", port)).await.unwrap();
+        let counts = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+        let mut tasks = Vec::new();
+        for (index, socket) in [cu_socket, ct_socket].into_iter().enumerate() {
+            let counts = counts.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut buffer = [0u8; 4096];
+                while let Ok((size, peer)) = socket.recv_from(&mut buffer).await {
+                    counts[index].fetch_add(1, Ordering::SeqCst);
+                    let request = Message::from_vec(&buffer[..size]).unwrap();
+                    let query = request.queries[0].clone();
+                    let mut response = Message::response(request.metadata.id, OpCode::Query);
+                    response.metadata.recursion_desired = true;
+                    response.metadata.recursion_available = true;
+                    response.add_query(query.clone()).add_answer(Record::from_rdata(
+                        query.name().clone(),
+                        60,
+                        RData::A(A(std::net::Ipv4Addr::new(192, 0, 2, index as u8 + 1))),
+                    ));
+                    socket.send_to(&response.to_vec().unwrap(), peer).await.unwrap();
+                }
+            }));
+        }
+        let cu = Uuid::new_v4();
+        let ct = Uuid::new_v4();
+        let mut upstream = upstream();
+        upstream.port = Some(port);
+        // A deliberately unusable static fallback must never be queried.
+        upstream.ips = vec!["192.0.2.53".parse().unwrap()];
+        upstream.bind_config.follow_flow = Some(7);
+        upstream.bind_config.wan_servers = vec![
+            DnsWanServers {
+                link_id: cu,
+                ips: vec!["127.0.0.2".parse().unwrap()],
+            },
+            DnsWanServers {
+                link_id: ct,
+                ips: vec!["127.0.0.3".parse().unwrap()],
+            },
+        ];
+        upstream.bind_config.resolved_wan = Some(DnsWanBinding {
+            ipv4: Some(("lo".into(), "127.0.0.1".parse().unwrap())),
+            ipv4_link_id: Some(cu),
+            ..Default::default()
+        });
+        let pool = ResolvePool::default();
+        for (link, expected, queries) in
+            [(cu, "192.0.2.1", [1, 0]), (ct, "192.0.2.2", [1, 1]), (cu, "192.0.2.1", [2, 1])]
+        {
+            upstream.bind_config.resolved_wan.as_mut().unwrap().ipv4_link_id = Some(link);
+            let resolver = pool.get_or_create(7, 0x8007, &upstream).unwrap();
+            let answer = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                resolver.lookup("example.test.", RecordType::A),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(answer.answers().iter().any(|record| record.data.to_string() == expected));
+            assert_eq!(
+                [counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)],
+                queries
+            );
+        }
+        upstream.bind_config.resolved_wan = None;
+        let blocked = pool.get_or_create(7, 0x8007, &upstream).unwrap();
+        assert!(matches!(*blocked, LandscapeResolver::Unavailable));
+        assert!(blocked.lookup("example.test.", RecordType::A).await.is_err());
+        assert_eq!([counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)], [2, 1]);
+        for task in tasks {
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn wan_address_change_replaces_transport_pool() {
         let pool = ResolvePool::default();
         let mut upstream = upstream();
@@ -101,6 +188,7 @@ mod tests {
         upstream.bind_config.resolved_wan = Some(landscape_common::dns::bind::DnsWanBinding {
             ipv4: Some(("wan1".into(), "192.0.2.1".parse().unwrap())),
             ipv6: None,
+            ..Default::default()
         });
         let first = pool.get_or_create(3, 0x8003, &upstream).unwrap();
         upstream.bind_config.resolved_wan.as_mut().unwrap().ipv4 =

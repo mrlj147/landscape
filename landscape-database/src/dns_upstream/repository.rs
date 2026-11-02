@@ -55,6 +55,19 @@ impl landscape_common::database::validator::StoreValidator<DnsUpstreamConfig>
                 });
             }
         }
+        if !config.bind_config.wan_servers.is_empty() {
+            let links = crate::wan_link::repository::WanLinkRepository::new(self.db.clone())
+                .net_iface_map()
+                .await
+                .map_err(ServiceConfigError::internal)?;
+            for servers in &config.bind_config.wan_servers {
+                if !links.contains_key(&servers.link_id) {
+                    return Err(ServiceConfigError::InvalidConfig {
+                        reason: format!("DNS WAN {} does not exist", servers.link_id),
+                    });
+                }
+            }
+        }
         config.bind_config.resolved_wan = None;
         Ok(())
     }

@@ -606,6 +606,23 @@ mod wan_link_ref_tests {
     }
 
     #[tokio::test]
+    async fn per_wan_dns_servers_roundtrip_and_reject_missing_links() {
+        let (provider, link_id) = setup().await;
+        let mut upstream = landscape_common::dns::config::DnsUpstreamConfig::default();
+        upstream.bind_config.follow_flow = Some(0);
+        upstream.bind_config.wan_servers = vec![landscape_common::dns::bind::DnsWanServers {
+            link_id,
+            ips: vec!["202.96.128.86".parse().unwrap()],
+        }];
+        provider.dns_upstream_config_store().checked_upsert(upstream.clone()).await.unwrap();
+        let saved =
+            provider.dns_upstream_config_store().find_by_id(upstream.id).await.unwrap().unwrap();
+        assert_eq!(saved.bind_config.wan_servers, upstream.bind_config.wan_servers);
+        upstream.bind_config.wan_servers[0].link_id = Uuid::new_v4();
+        assert!(provider.dns_upstream_config_store().checked_upsert(upstream).await.is_err());
+    }
+
+    #[tokio::test]
     async fn followed_dns_flow_cannot_be_disabled_renumbered_or_deleted() {
         use landscape_common::database::validator::StoreValidator;
         let (provider, link_id) = setup().await;

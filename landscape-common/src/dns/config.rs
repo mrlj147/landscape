@@ -89,6 +89,59 @@ impl crate::database::validator::ValidatableConfig for DnsUpstreamConfig {
                 reason: "DNS WAN following cannot be combined with a fixed source address".into(),
             });
         }
+        if !self.bind_config.wan_servers.is_empty() {
+            let invalid = |reason: &str| crate::service::ServiceConfigError::InvalidConfig {
+                reason: reason.into(),
+            };
+            if self.bind_config.follow_flow.is_none() {
+                return Err(invalid("Per-WAN DNS servers require a followed flow"));
+            }
+            let mut links = std::collections::HashSet::new();
+            for servers in &self.bind_config.wan_servers {
+                if servers.link_id.is_nil() || !links.insert(servers.link_id) {
+                    return Err(invalid("Per-WAN DNS requires unique, nonempty WAN IDs"));
+                }
+                if servers.ips.is_empty()
+                    || servers.ips.iter().any(|ip| {
+                        ip.is_unspecified()
+                            || ip.is_multicast()
+                            || ip.is_loopback()
+                            || matches!(ip, IpAddr::V4(v4) if v4.is_broadcast())
+                            || matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local())
+                    })
+                {
+                    return Err(invalid("Each WAN needs at least one usable DNS server IP"));
+                }
+            }
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{database::validator::ValidatableConfig, dns::bind::DnsWanServers};
+
+    #[test]
+    fn per_wan_servers_require_binding_unique_links_and_valid_addresses() {
+        let mut config = DnsUpstreamConfig::default();
+        assert!(config.validate().is_ok());
+        config.bind_config.wan_servers = vec![DnsWanServers {
+            link_id: Uuid::new_v4(),
+            ips: vec!["202.96.128.86".parse().unwrap()],
+        }];
+        assert!(config.validate().is_err());
+        config.bind_config.follow_flow = Some(0);
+        assert!(config.validate().is_ok());
+        config.bind_config.wan_servers.push(config.bind_config.wan_servers[0].clone());
+        assert!(config.validate().is_err());
+        config.bind_config.wan_servers.pop();
+        for ip in ["0.0.0.0", "::", "127.0.0.1", "224.0.0.1", "255.255.255.255", "fe80::1"] {
+            config.bind_config.wan_servers[0].ips = vec![ip.parse().unwrap()];
+            assert!(config.validate().is_err(), "{ip}");
+        }
+        config.bind_config.wan_servers[0].ips.clear();
+        assert!(config.validate().is_err());
     }
 }

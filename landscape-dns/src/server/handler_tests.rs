@@ -841,6 +841,56 @@ mod tests {
     }
 
     #[test]
+    fn wan_change_drops_carrier_answers_and_keeps_matching_rule_when_unavailable() {
+        run_async_test(async {
+            use landscape_common::dns::bind::{DnsWanBinding, DnsWanServers};
+            let mut rule = test_runtime_rule();
+            let link = Uuid::new_v4();
+            rule.resolve_mode.bind_config.follow_flow = Some(0);
+            rule.resolve_mode.bind_config.wan_servers = vec![DnsWanServers {
+                link_id: link,
+                ips: vec!["192.0.2.53".parse().unwrap()],
+            }];
+            rule.resolve_mode.bind_config.resolved_wan = Some(DnsWanBinding {
+                ipv4: Some(("wan1".into(), "192.0.2.1".parse().unwrap())),
+                ipv4_link_id: Some(link),
+                ..Default::default()
+            });
+            let handler = make_test_handler(vec![rule.clone()], vec![]);
+            handler
+                .insert(
+                    "cached.example.",
+                    RecordType::A,
+                    vec![sample_a_record("cached.example.", 60, Ipv4Addr::new(1, 1, 1, 1))],
+                    ResponseCode::NoError,
+                    &DnsRuntimeMarkInfo { mark: FlowMark::default(), priority: 0 },
+                    FilterResult::Unfilter,
+                    Some(rule.id),
+                    Some(rule.index),
+                )
+                .await;
+            rule.resolve_mode.bind_config.resolved_wan = None;
+            let (_, resolve_engine) =
+                DnsRequestHandler::test_engines_from_legacy(ChainDnsServerInitInfo {
+                    dns_rules: vec![rule],
+                    redirect_rules: vec![],
+                });
+            handler.renew_dns_rules(resolve_engine).await;
+            let runtime = handler.snapshot.load_full();
+            assert!(
+                runtime.cache.get(&(Arc::from("cached.example."), RecordType::A)).await.is_none()
+            );
+            let result = handler
+                .check_domain(&ParsedDomain::new("cached.example.").unwrap(), RecordType::A, true)
+                .await;
+            assert!(
+                result.error.is_some(),
+                "unavailable carrier DNS must fail, never fall through"
+            );
+        });
+    }
+
+    #[test]
     fn renew_dns_rules_preserves_redirects_and_caps_migrated_cache_ttl() {
         run_async_test(async {
             let handler = make_test_handler(

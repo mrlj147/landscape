@@ -136,6 +136,7 @@ pub struct DNSResolveRuntime {
     resolver: Arc<LandscapeResolver>,
 
     enable_ip_validation: bool,
+    wan_following: bool,
 }
 
 impl DNSResolveRuntime {
@@ -154,6 +155,7 @@ impl DNSResolveRuntime {
         let _ = span.enter();
 
         let enable_ip_validation = upstream.enable_ip_validation.unwrap_or(false);
+        let wan_following = upstream.bind_config.follow_flow.is_some();
         let dns_mark = SocketMark::get_dns_mark(mark_config, flow_id);
         let Some(resolver) = pool.get_or_create(flow_id, dns_mark, &upstream) else {
             tracing::warn!(rule_id = %rule_id, flow_id = flow_id, "skip DNS rule: failed to build resolver");
@@ -170,7 +172,14 @@ impl DNSResolveRuntime {
             resolver,
             mark,
             enable_ip_validation,
+            wan_following,
         })
+    }
+
+    /// Carrier/CDN answers from the previous WAN must not survive a transport change.
+    pub(crate) fn can_reuse_answers_from(&self, previous: &Self) -> bool {
+        (!self.wan_following && !previous.wan_following)
+            || Arc::ptr_eq(&self.resolver, &previous.resolver)
     }
 
     pub fn mark(&self) -> &DnsRuntimeMarkInfo {
