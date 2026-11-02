@@ -220,6 +220,27 @@ impl FailoverSelections {
                 if policy == landscape_common::flow::FlowConnectionPolicy::ResetExisting {
                     state.generation = state.generation.wrapping_add(1);
                 }
+                use landscape_common::flow::failover::WanSwitchCause as Cause;
+                let cause = if !config.failover.enable {
+                    Cause::ManualPrimary
+                } else if reordered {
+                    Cause::PriorityChanged
+                } else if let Some(previous) = previous {
+                    if !has_route(&previous) {
+                        Cause::LinkUnavailable
+                    } else {
+                        match verdict(&previous) {
+                            WanLinkHealthState::Healthy => Cause::Recovery,
+                            WanLinkHealthState::Unhealthy => Cause::HealthFailure,
+                            WanLinkHealthState::Unknown if selected.is_none() => {
+                                Cause::UnknownGraceExpired
+                            }
+                            WanLinkHealthState::Unknown => Cause::HealthUnknown,
+                        }
+                    }
+                } else {
+                    Cause::AvailableWan
+                };
                 let at_ms = now_ms();
                 state.status.selected_at_ms = at_ms;
                 state.changed = now;
@@ -229,6 +250,7 @@ impl FailoverSelections {
                     active: selected,
                     reason,
                     connection_policy: policy,
+                    cause,
                 });
                 if state.status.history.len() > 32 {
                     state.status.history.remove(0);
@@ -239,6 +261,7 @@ impl FailoverSelections {
                     ?previous,
                     ?selected,
                     ?reason,
+                    ?cause,
                     ?policy,
                     "WAN failover exit changed"
                 );
@@ -658,8 +681,16 @@ mod failover_tests {
         assert_eq!(selected(&mut state, &config, &routes, &health), ["wan1"]);
         health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unhealthy;
         assert_eq!(selected(&mut state, &config, &routes, &health), ["wan2"]);
+        assert_eq!(
+            state.active[&(9, false)].status.history.last().unwrap().cause,
+            landscape_common::flow::failover::WanSwitchCause::HealthFailure
+        );
         health.get_mut(&primary).unwrap().state = WanLinkHealthState::Healthy;
         assert_eq!(selected(&mut state, &config, &routes, &health), ["wan1"]);
+        assert_eq!(
+            state.active[&(9, false)].status.history.last().unwrap().cause,
+            landscape_common::flow::failover::WanSwitchCause::Recovery
+        );
     }
 
     #[test]

@@ -59,6 +59,8 @@ jobs:
         run: |
           wan_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_ebpf" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-ebpf-build.json" | tail -1)
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::route:: --test-threads=1
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::helper::wire:: --test-threads=1
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" maps::route:: --test-threads=1
       - uses: actions/setup-node@v6
         with:
           node-version: '24'

@@ -71,7 +71,7 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
               {{ name(event.active, row) }}</n-text
             >
             <n-text depth="3">{{
-              t(`flow.failover.reason.${event.reason}`)
+              t(`flow.failover.cause.${event.cause}`)
             }}</n-text>
             <n-text depth="3">{{
               t(`flow.failover.${event.connection_policy}`)

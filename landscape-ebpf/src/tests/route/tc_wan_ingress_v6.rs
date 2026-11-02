@@ -18,7 +18,7 @@ use crate::tests::{
     helper::map::{
         LAN_CACHE, LAN_ROUTE_TYPE, ROUTE_TYPE_NEXTHOP, TARGET_IFINDEX, WAN_CACHE, WAN_IFINDEX,
         WAN_ROUTE_TYPE, as_bytes, create_route6_cache_inner_map, insert_ip_mac_v6,
-        insert_route6_lan_entry, lookup_rt6_reverse_cache_value, put_rt6_cache_value,
+        insert_route6_lan_entry, lookup_rt6_reverse_cache_value, put_rt6_reverse_cache_value,
     },
     isolated_pin_root,
     pkt::{simple_ipv4_tcp, simple_ipv6_tcp_syn},
@@ -654,7 +654,7 @@ fn wan6_ingress_existing_wan_cache_entry_updated_in_place() {
     // mark stays untouched.
     load_skel!("tc-wan6-cacheupd", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
-    put_rt6_cache_value(
+    put_rt6_reverse_cache_value(
         &skel.maps.rt6_cache_map,
         WAN_CACHE,
         lan_client(),
@@ -687,7 +687,7 @@ fn wan6_ingress_existing_wan_cache_entry_xdp_flag_refreshed() {
     // xdp_redirect_able map keyed by skb->ifindex (TRUE row).
     load_skel!("tc-wan6-cacheupd-xdp", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
-    put_rt6_cache_value(
+    put_rt6_reverse_cache_value(
         &skel.maps.rt6_cache_map,
         WAN_CACHE,
         lan_client(),
@@ -724,7 +724,7 @@ fn wan6_ingress_reverse_entry_in_lan_cache_blocks_wan_write() {
     load_skel!("tc-wan6-lancache", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, LAN_CACHE);
-    put_rt6_cache_value(
+    put_rt6_reverse_cache_value(
         &skel.maps.rt6_cache_map,
         LAN_CACHE,
         lan_client(),

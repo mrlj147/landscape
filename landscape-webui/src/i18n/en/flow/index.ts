@@ -1,5 +1,15 @@
 export default {
   failover: {
+    cause: {
+      available_wan: "Usable exit became available",
+      manual_primary: "Automatic switching disabled; use primary",
+      priority_changed: "Primary/backup order changed",
+      link_unavailable: "Previous link or route unavailable",
+      health_failure: "Previous exit failed health checks",
+      health_unknown: "Previous exit unknown; use a healthy WAN",
+      unknown_grace_expired: "Unknown-state grace expired",
+      recovery: "Higher-priority WAN recovered and stabilized",
+    },
     health: {
       healthy: "Healthy",
       unhealthy: "Probe failed",

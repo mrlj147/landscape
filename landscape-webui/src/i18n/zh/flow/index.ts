@@ -1,5 +1,15 @@
 export default {
   failover: {
+    cause: {
+      available_wan: "发现可用出口",
+      manual_primary: "关闭自动切换，固定主 WAN",
+      priority_changed: "调整主备顺序",
+      link_unavailable: "原出口链路或路由断开",
+      health_failure: "原出口探测失败",
+      health_unknown: "原出口状态未知，改用健康线路",
+      unknown_grace_expired: "未知状态宽限期结束",
+      recovery: "高优先级线路恢复，稳定后回切",
+    },
     health: {
       healthy: "正常",
       unhealthy: "探测失败",

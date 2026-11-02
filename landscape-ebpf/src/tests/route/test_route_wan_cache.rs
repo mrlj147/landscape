@@ -9,8 +9,8 @@ use zerocopy::IntoBytes;
 use crate::tests::{
     TestSkb,
     helper::map::{
-        WAN_CACHE, WAN_IFINDEX, create_route6_cache_inner_map, local_addr,
-        lookup_rt6_reverse_cache_value, remote_addr,
+        WAN_CACHE, create_route6_cache_inner_map, local_addr, lookup_rt6_reverse_cache_value,
+        remote_addr,
     },
     isolated_pin_root,
     pkt::simple_ipv6_tcp_syn,
@@ -30,7 +30,7 @@ fn v6_set_cache_in_wan_writes_reverse_key() {
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
 
     let packet = simple_ipv6_tcp_syn(remote_addr(), local_addr());
-    let mut ctx = TestSkb { ifindex: WAN_IFINDEX, ..Default::default() };
+    let mut ctx = TestSkb { ifindex: 1, ..Default::default() };
 
     let result = skel
         .progs
@@ -51,7 +51,7 @@ fn v6_set_cache_in_wan_writes_reverse_key() {
         remote_addr(),
     )
     .expect("reverse WAN cache entry missing");
-    assert_eq!(reverse.ifindex, WAN_IFINDEX);
+    assert_eq!(reverse.ifindex, 1);
     assert_eq!(reverse.has_mac, 1);
 
     assert!(

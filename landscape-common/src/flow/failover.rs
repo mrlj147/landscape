@@ -17,6 +17,20 @@ pub enum WanSelectionReason {
     NoAvailableWan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WanSwitchCause {
+    AvailableWan,
+    ManualPrimary,
+    PriorityChanged,
+    LinkUnavailable,
+    HealthFailure,
+    HealthUnknown,
+    UnknownGraceExpired,
+    Recovery,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlowWanCandidateStatus {
@@ -34,6 +48,7 @@ pub struct FlowWanSwitchEvent {
     pub active: Option<Uuid>,
     pub reason: WanSelectionReason,
     pub connection_policy: FlowConnectionPolicy,
+    pub cause: WanSwitchCause,
 }
 
 /// One independently selected address family. History is bounded and in-memory.

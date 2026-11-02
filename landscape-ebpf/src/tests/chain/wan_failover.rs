@@ -133,7 +133,7 @@ fn real_traffic(ipv6: bool) {
     let address = |action: &str, iface: &str, value: &str| {
         let cidr = format!("{value}/{prefix}");
         let mut args = vec![family, "addr", action, &cidr, "dev", iface];
-        if ipv6 && action == "add" {
+        if ipv6 && action != "del" {
             args.push("nodad");
         }
         ip(&args);
@@ -252,6 +252,13 @@ fn real_traffic(ipv6: bool) {
     });
     drop(links);
     ip(&["link", "set", wan1.host(), "up"]);
+    if ipv6 {
+        // Linux removes global IPv6 addresses on link-down by default. Model
+        // address reacquisition on both ends before declaring recovery.
+        address("replace", wan1.host(), own1);
+        let _peer = uplink.enter();
+        address("replace", wan1.peer(), peer1);
+    }
     assert!(probe(wan1.host(), peer1));
     runtime.block_on(async {
         health(&routes, a, true, ipv6).await;

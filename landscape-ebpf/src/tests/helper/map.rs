@@ -523,3 +523,47 @@ pub(crate) fn lookup_rt6_reverse_cache_value<T: MapCore>(
         .expect("lookup reverse fixture")
         .map(|bytes| read_unaligned::<Route6CacheValue>(&bytes))
 }
+
+pub(crate) fn put_rt4_reverse_cache_value<T: MapCore>(
+    outer_map: &T,
+    cache_index: u32,
+    local: Ipv4Addr,
+    remote: Ipv4Addr,
+    ifindex: u32,
+    has_mac: bool,
+    mark_value: u32,
+) {
+    let inner = lookup_inner_map(outer_map, cache_index);
+    let mut key = make_rt4_cache_key(local, remote);
+    key.local_port = 443_u16.to_be();
+    key.remote_port = 12345_u16.to_be();
+    let value = Route4CacheValue {
+        ifindex,
+        has_mac: u8::from(has_mac),
+        mark_value,
+        ..Default::default()
+    };
+    inner.update(as_bytes(&key), as_bytes(&value), MapFlags::ANY).expect("insert reverse fixture");
+}
+
+pub(crate) fn put_rt6_reverse_cache_value<T: MapCore>(
+    outer_map: &T,
+    cache_index: u32,
+    local: Ipv6Addr,
+    remote: Ipv6Addr,
+    ifindex: u32,
+    has_mac: bool,
+    mark_value: u32,
+) {
+    let inner = lookup_inner_map(outer_map, cache_index);
+    let mut key = make_rt6_cache_key(local, remote);
+    key.local_port = 443_u16.to_be();
+    key.remote_port = 12345_u16.to_be();
+    let value = Route6CacheValue {
+        ifindex,
+        has_mac: u8::from(has_mac),
+        mark_value,
+        ..Default::default()
+    };
+    inner.update(as_bytes(&key), as_bytes(&value), MapFlags::ANY).expect("insert reverse fixture");
+}

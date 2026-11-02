@@ -39,7 +39,7 @@ use crate::tests::{
     helper::map::{
         LAN_CACHE, LAN_ROUTE_TYPE, ROUTE_TYPE_NEXTHOP, TARGET_IFINDEX, WAN_CACHE, WAN_IFINDEX,
         WAN_ROUTE_TYPE, as_bytes, create_route4_cache_inner_map, insert_ip_mac_v4,
-        insert_route4_lan_entry, lookup_rt4_reverse_cache_value, put_rt4_cache_value,
+        insert_route4_lan_entry, lookup_rt4_reverse_cache_value, put_rt4_reverse_cache_value,
     },
     isolated_pin_root,
     pkt::{simple_ipv4_tcp, simple_ipv6_tcp_syn},
@@ -453,7 +453,7 @@ fn wan_ingress_reverse_entry_in_lan_cache_blocks_wan_write() {
     load_skel!("tc-wan-in-flow-lancache", skel);
     create_route4_cache_inner_map(&skel.maps.rt4_cache_map, WAN_CACHE);
     create_route4_cache_inner_map(&skel.maps.rt4_cache_map, LAN_CACHE);
-    put_rt4_cache_value(
+    put_rt4_reverse_cache_value(
         &skel.maps.rt4_cache_map,
         LAN_CACHE,
         lan_client(),
@@ -494,7 +494,7 @@ fn wan_ingress_existing_wan_cache_entry_updated_in_place() {
     // ifindex / has_mac / xdp flag refreshed while the mark stays untouched.
     load_skel!("tc-wan-in-flow-cacheupd", skel);
     create_route4_cache_inner_map(&skel.maps.rt4_cache_map, WAN_CACHE);
-    put_rt4_cache_value(
+    put_rt4_reverse_cache_value(
         &skel.maps.rt4_cache_map,
         WAN_CACHE,
         lan_client(),
@@ -536,7 +536,7 @@ fn wan_ingress_existing_wan_cache_entry_xdp_flag_refreshed() {
     // xdp_redirect_able map keyed by skb->ifindex (TRUE row).
     load_skel!("tc-wan-in-flow-cacheupd-xdp", skel);
     create_route4_cache_inner_map(&skel.maps.rt4_cache_map, WAN_CACHE);
-    put_rt4_cache_value(
+    put_rt4_reverse_cache_value(
         &skel.maps.rt4_cache_map,
         WAN_CACHE,
         lan_client(),

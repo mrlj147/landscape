@@ -126,7 +126,7 @@ function changeKind(
     <n-button
       size="small"
       :disabled="group.targets.length >= 4"
-      @click="group.targets.push(target('icmp'))"
+      @click="addTarget(group)"
       >{{ t("network.health_check.add_target") }}</n-button
     >
   </n-card>
