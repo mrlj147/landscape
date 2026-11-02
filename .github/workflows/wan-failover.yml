@@ -1,5 +1,6 @@
 name: WAN failover tests
 on:
+  workflow_dispatch:
   push:
     branches: ['codex/multi-wan-failover']
   pull_request:
@@ -30,6 +31,7 @@ jobs:
       - run: |
           cargo test --locked -p landscape --lib wan_link_service::
       - run: cargo test --locked -p landscape-webserver export_openapi_json
+      - run: cargo test --locked -p landscape-ebpf --features test-route --lib --no-run
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
