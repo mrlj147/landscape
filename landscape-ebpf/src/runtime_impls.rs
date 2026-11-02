@@ -299,7 +299,7 @@ impl RouteTableDataplane for EbpfRouteTableDataplane {
     async fn sync_router_wan_policy(
         &self,
         policy: Option<&landscape_common::sys_service::route_service::RouterWanPolicy>,
-    ) -> bool {
+    ) -> Result<(), String> {
         maps::route::sync_router_wan_policy(policy).await
     }
 

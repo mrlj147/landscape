@@ -354,7 +354,7 @@ fn wan_failover_router_rules_restore_and_preserve_lan() {
         let routes: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
         Some(routes[0]["dev"].as_str().unwrap().to_string())
     };
-    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))));
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))).is_ok());
     assert_eq!(get("-4", "203.0.113.10", None).as_deref(), Some(wan1.host()));
     assert_eq!(get("-6", "2001:db8::10", None).as_deref(), Some(wan1.host()));
     assert_eq!(get("-4", "10.10.0.2", None).as_deref(), Some(lan.host()));
@@ -365,6 +365,7 @@ fn wan_failover_router_rules_restore_and_preserve_lan() {
     );
     assert!(
         rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&RouterWanPolicy::default())))
+            .is_ok()
     );
     assert!(
         get("-4", "203.0.113.10", None).is_none(),
@@ -372,11 +373,12 @@ fn wan_failover_router_rules_restore_and_preserve_lan() {
     );
     assert!(get("-6", "2001:db8::10", None).is_none());
     assert_eq!(get("-4", "10.10.0.2", None).as_deref(), Some(lan.host()));
-    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)));
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
     assert_eq!(get("-4", "203.0.113.10", None).as_deref(), Some(wan2.host()));
     assert_eq!(get("-6", "2001:db8::10", None).as_deref(), Some(wan2.host()));
     // An unrelated existing rule at the reserved priority is not overwritten.
     ip(&["rule", "add", "pref", "10427", "table", "main"]);
-    assert!(!rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))));
+    let error = rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))).unwrap_err();
+    assert!(error.contains("10427"), "{error}");
     assert_eq!(get("-4", "203.0.113.10", None).as_deref(), Some(wan2.host()));
 }

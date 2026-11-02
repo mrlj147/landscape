@@ -62,10 +62,7 @@ pub(super) async fn probe_target(
                     if address.is_ipv6() != src.is_ipv6() {
                         continue;
                     }
-                    if http_request(dev, src, SocketAddr::new(address, port), &url, mark)
-                        .await
-                        .unwrap_or(false)
-                    {
+                    if http_request(dev, src, SocketAddr::new(address, port), &url, mark).await? {
                         return Ok(true);
                     }
                 }
@@ -231,6 +228,24 @@ fn matches_query(request: &Message, reply: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn http_probe_preserves_local_socket_errors() {
+        // A missing device is a local checker failure, not evidence that the
+        // remote HTTP service is unhealthy. No network request can be sent.
+        let result = probe_target(
+            "ld-no-such-dev",
+            Ipv4Addr::LOCALHOST.into(),
+            &WanProbeTarget::Http {
+                url: "http://127.0.0.1/".into(),
+                dns_server: Ipv4Addr::LOCALHOST.into(),
+            },
+            Duration::from_secs(1),
+            0,
+        )
+        .await;
+        assert!(matches!(result, Err(ProbeError::Socket(_))), "{result:?}");
+    }
 
     #[test]
     fn ignores_unrelated_dns_replies() {

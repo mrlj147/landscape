@@ -127,14 +127,14 @@ async fn reconcile_family(
     Ok(())
 }
 
-pub async fn sync_router_wan_policy(policy: Option<&RouterWanPolicy>) -> bool {
+pub async fn sync_router_wan_policy(policy: Option<&RouterWanPolicy>) -> Result<(), String> {
     for (family, target) in
         [("-4", policy.and_then(|p| p.ipv4.as_ref())), ("-6", policy.and_then(|p| p.ipv6.as_ref()))]
     {
         if let Err(error) = reconcile_family(family, policy.is_some(), target).await {
             tracing::error!(family, %error, "failed to reconcile router WAN binding");
-            return false;
+            return Err(format!("{family}: {error}"));
         }
     }
-    true
+    Ok(())
 }

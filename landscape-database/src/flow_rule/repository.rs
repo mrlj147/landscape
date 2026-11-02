@@ -509,7 +509,9 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
                         .find_by_id(link_id)
                         .await
                         .map_err(landscape_common::service::ServiceConfigError::internal)?;
-                    if !link.is_some_and(|link| link.health_check.enable) {
+                    if let Some(link) = link {
+                        link.validate_failover_health()?;
+                    } else {
                         return Err(landscape_common::service::ServiceConfigError::InvalidConfig {
                             reason: "enable health checks on every primary/backup WAN before enabling failover".into(),
                         });
@@ -657,6 +659,46 @@ mod wan_link_ref_tests {
         wan.health_check.enable = false;
         let error = provider.wan_link_store().validate_cross(&mut wan).await.unwrap_err();
         assert!(error.to_string().contains("health"));
+        flow.failover.enable = false;
+        provider.flow_rule_store().upsert(flow).await.unwrap();
+        assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dual_stack_failover_requires_both_probe_families_on_flow_and_wan_edits() {
+        use landscape_common::database::validator::StoreValidator;
+        let (provider, link_id) = setup().await;
+        let mut wan = provider.wan_link_store().find_by_id(link_id).await.unwrap().unwrap();
+        wan.v4.enable = true;
+        wan.pd.enable = true;
+        wan.health_check.enable = true;
+        wan.health_check.probe = serde_json::from_value(serde_json::json!({
+            "t": "multi", "groups": [{"name": "test", "quorum": 1, "targets": [
+                {"t": "icmp", "address": "192.0.2.1"}
+            ]}]
+        }))
+        .unwrap();
+        provider.wan_link_store().upsert(wan.clone()).await.unwrap();
+        let mut flow = flow_config(link_id, "ppp0");
+        flow.failover.enable = true;
+        let error = provider.flow_rule_store().validate_cross(&mut flow).await.unwrap_err();
+        assert!(error.to_string().contains("IPv6 probe: false"));
+        let v4_only = wan.health_check.probe.clone();
+        wan.health_check.probe = serde_json::from_value(serde_json::json!({
+            "t": "multi", "groups": [
+                {"name": "test", "quorum": 1, "targets": [{"t": "icmp", "address": "192.0.2.1"}]},
+                {"name": "test", "quorum": 1, "targets": [{"t": "icmp", "address": "2001:db8::1"}]}
+            ]
+        }))
+        .unwrap();
+        provider.wan_link_store().upsert(wan.clone()).await.unwrap();
+        assert!(provider.flow_rule_store().validate_cross(&mut flow).await.is_ok());
+        provider.flow_rule_store().upsert(flow.clone()).await.unwrap();
+        assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_ok());
+        wan.health_check.probe = v4_only;
+        let error = provider.wan_link_store().validate_cross(&mut wan).await.unwrap_err();
+        assert!(error.to_string().contains("IPv6 probe: false"));
+        // Once automatic failover is off, the WAN can use a legacy IPv4-only probe.
         flow.failover.enable = false;
         provider.flow_rule_store().upsert(flow).await.unwrap();
         assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_ok());

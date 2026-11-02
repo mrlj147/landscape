@@ -150,15 +150,17 @@ impl StoreValidator<WanLinkConfig> for WanLinkRepository {
     /// netlink-dependent checks (live attach iface / live ppp device) stay
     /// in the webserver handler; see `validate_wan_link` there.
     async fn validate_cross(&self, config: &mut WanLinkConfig) -> Result<(), ServiceConfigError> {
-        if !config.health_check.enable {
+        {
             let flows = crate::flow_rule::repository::FlowConfigRepository::new(self.db.clone())
                 .list()
                 .await
                 .map_err(ServiceConfigError::internal)?;
             if let Some(flow) = flows.iter().find(|flow| flow.failover.enable && flow.flow_targets.iter().any(|entry|
                 matches!(entry.target, landscape_common::flow::FlowTarget::Interface { link_id, .. } if link_id == config.id))) {
-                return Err(ServiceConfigError::InvalidConfig { reason: format!(
-                    "WAN is used by automatic failover flow {}; disable its automatic switching before disabling health checks", flow.flow_id) });
+                if let Err(error) = config.validate_failover_health() {
+                    return Err(ServiceConfigError::InvalidConfig { reason: format!(
+                        "WAN is used by automatic failover flow {}: {}", flow.flow_id, error) });
+                }
             }
         }
         let others: Vec<WanLinkConfig> = self

@@ -5,6 +5,19 @@ on:
     branches: ['codex/multi-wan-failover']
   pull_request:
     paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'landscape-ebpf/**'
+      - 'landscape-dns/**'
+      - 'landscape-database/**'
+      - 'landscape-common/src/dns/**'
+      - 'landscape-common/src/sys_service/route_service/**'
+      - 'landscape-webserver/src/services/routing.rs'
+      - 'landscape/src/dns/**'
+      - 'landscape/src/sys_service/**'
+      - 'landscape-webui/**'
+      - 'landscape-types/**'
+      - 'scripts/package_lkit.py'
       - 'landscape-common/src/flow/**'
       - 'landscape-common/src/wan_link/**'
       - 'landscape-core/src/route/**'
@@ -17,7 +30,7 @@ permissions:
   contents: read
 jobs:
   test:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
     env:
       RUST_LOG: warn
@@ -27,6 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -36,6 +50,7 @@ jobs:
           grep 'test result:' "$RUNNER_TEMP/wan-state.log"
       - run: |
           cargo test --locked -p landscape --lib wan_link_service::
+          cargo test --locked -p landscape --lib flow::rule_service::tests::
       - name: Compile privileged health and DNS socket tests
         run: cargo test --locked -p landscape -p landscape-dns --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-service-build.json"
       - name: Probe confinement and DNS socket bindings
@@ -73,3 +88,22 @@ jobs:
           path: |
             landscape-types/openapi.json
             landscape-webui/dist
+      - name: Check release code before packaging
+        if: github.event_name == 'push'
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --workspace --features metric-persistent -- -D warnings
+      - name: Build reviewed x86_64 release
+        if: github.event_name == 'push'
+        run: cargo build --locked --release -p landscape-webserver --features metric-persistent
+      - name: Package private Landscape Kit repository
+        if: github.event_name == 'push'
+        run: |
+          sudo apt-get install -y --no-install-recommends zstd
+          python3 scripts/package_lkit.py
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
+        with:
+          name: landscape-kit-x86_64-${{ github.sha }}
+          path: lkit-repository
+          retention-days: 14

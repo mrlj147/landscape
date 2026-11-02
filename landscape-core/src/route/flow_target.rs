@@ -134,6 +134,9 @@ impl FailoverSelections {
                     retry_after_secs: None,
                     candidates: vec![],
                     history: vec![],
+                    router_policy_applied: None,
+                    router_policy_error: None,
+                    router_policy_checked_at_ms: None,
                 },
             });
             let reordered = state.order != order;
@@ -185,8 +188,23 @@ impl FailoverSelections {
                 // Only configured, routed Unknown links qualify; known failures never do.
                 let unknown =
                     |id: &Uuid| has_route(id) && verdict(id) == WanLinkHealthState::Unknown;
-                let candidate =
-                    previous.filter(unknown).or_else(|| order.iter().copied().find(unknown));
+                let remaining_grace = |id: &Uuid| {
+                    u64::from(config.failover.unknown_grace_secs)
+                        .saturating_sub(now.duration_since(state.unknown_since[id]).as_secs())
+                };
+                // A previously selected Unknown WAN may have exhausted its
+                // grace while another candidate has only just become Unknown.
+                // Prefer the longest remaining grace; preserve the current WAN
+                // on ties, then the configured order to avoid needless churn.
+                let candidate = order
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(_, id)| unknown(id))
+                    .max_by_key(|(index, id)| {
+                        (remaining_grace(id), Some(*id) == previous, std::cmp::Reverse(*index))
+                    })
+                    .map(|(_, id)| id);
                 match candidate {
                     Some(id) => {
                         let elapsed = now.duration_since(state.unknown_since[&id]).as_secs();
@@ -421,6 +439,18 @@ impl IpRouteService {
     ) -> Vec<landscape_common::flow::failover::FlowWanStatus> {
         let selections = self.failover_selections.lock().await;
         let mut statuses: Vec<_> = selections.active.values().map(|s| s.status.clone()).collect();
+        let policy = self.router_wan_policy.read().await;
+        if policy.is_some() {
+            let applied = self.router_policy_applied.read().await;
+            let current = applied.as_ref().filter(|s| s.policy == *policy);
+            for status in &mut statuses {
+                if status.flow_id == 0 || Some(status.flow_id) == selections.default_owner {
+                    status.router_policy_applied = Some(current.is_some_and(|s| s.error.is_none()));
+                    status.router_policy_error = current.and_then(|s| s.error.clone());
+                    status.router_policy_checked_at_ms = current.map(|s| s.checked_at_ms);
+                }
+            }
+        }
         statuses.sort_by_key(|s| (s.flow_id, s.ipv6));
         statuses
     }
@@ -606,6 +636,53 @@ mod failover_tests {
         service.sync_flow_wan_targets(&[config]).await;
         assert!(service.get_flow_wan_statuses().await.iter().all(|s| s.flow_id != 0));
         assert!(service.router_wan_policy.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn router_policy_status_distinguishes_pending_failure_and_applied() {
+        let (mut config, routes, health, _, _) = setup();
+        config.failover.bind_default_flow = true;
+        config.failover.bind_router_traffic = true;
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route).await;
+        }
+        for (_, state) in health {
+            service.update_link_health(state).await;
+        }
+        service.sync_flow_wan_targets(&[config.clone()]).await;
+        let pending = service.get_flow_wan_statuses().await;
+        assert!(!pending.is_empty());
+        assert!(pending.iter().all(|s| s.router_policy_applied == Some(false)
+            && s.router_policy_error.is_none()
+            && s.router_policy_checked_at_ms.is_none()));
+        let policy = service.router_wan_policy.read().await.clone();
+        *service.router_policy_applied.write().await = Some(super::super::RouterPolicyApplyState {
+            policy,
+            error: Some("rule priority 10427 occupied".into()),
+            checked_at_ms: 123,
+        });
+        let failed = service.get_flow_wan_statuses().await;
+        assert!(failed.iter().all(|s| s.router_policy_applied == Some(false)
+            && s.router_policy_error.as_deref() == Some("rule priority 10427 occupied")
+            && s.router_policy_checked_at_ms == Some(123)));
+        service.reconcile_router_wan_policy().await;
+        assert!(
+            service
+                .get_flow_wan_statuses()
+                .await
+                .iter()
+                .all(|s| s.router_policy_applied == Some(true) && s.router_policy_error.is_none())
+        );
+        config.failover.bind_router_traffic = false;
+        service.sync_flow_wan_targets(&[config]).await;
+        assert!(
+            service
+                .get_flow_wan_statuses()
+                .await
+                .iter()
+                .all(|s| s.router_policy_applied.is_none() && s.router_policy_error.is_none())
+        );
     }
 
     fn setup() -> (FlowConfig, WanRoutesByOwner, LinkHealths, Uuid, Uuid) {
@@ -800,6 +877,32 @@ mod failover_tests {
             selected(&mut FailoverSelections::default(), &config, &routes, &health),
             ["wan2"]
         );
+    }
+
+    #[test]
+    fn fresh_unknown_backup_is_used_after_primary_grace_expires() {
+        let (mut config, routes, mut health, primary, backup) = setup();
+        config.failover.unknown_grace_secs = 30;
+        health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unknown;
+        health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unhealthy;
+        let mut state = FailoverSelections::default();
+        let now = std::time::Instant::now();
+        let resolve = |state: &mut FailoverSelections, health: &LinkHealths, secs| {
+            state.resolve_at(
+                std::slice::from_ref(&config),
+                &routes,
+                health,
+                false,
+                now + std::time::Duration::from_secs(secs),
+            )[&9]
+                .clone()
+        };
+        assert_eq!(resolve(&mut state, &health, 0)[0].0.info.iface_name, "wan1");
+        health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unknown;
+        assert_eq!(resolve(&mut state, &health, 31)[0].0.info.iface_name, "wan2");
+        assert_eq!(state.active[&(9, false)].status.retry_after_secs, Some(30));
+        assert_eq!(resolve(&mut state, &health, 60)[0].0.info.iface_name, "wan2");
+        assert!(resolve(&mut state, &health, 61).is_empty());
     }
 
     #[test]

@@ -91,6 +91,7 @@ fn health_probes_are_confined_and_recover_in_both_families() {
             &remote,
             "nodad",
         ]);
+        ip(&["-n", &peer.name, "-6", "addr", "add", "fe80::53/64", "dev", &remote, "nodad"]);
         ip(&["-n", &peer.name, "addr", "add", "198.19.0.53/32", "dev", "lo"]);
         ip(&["-n", &peer.name, "-6", "addr", "add", "fd53::53/128", "dev", "lo", "nodad"]);
         let metric = if n == 1 { "200" } else { "100" };
@@ -156,6 +157,20 @@ fn health_probes_are_confined_and_recover_in_both_families() {
     for ipv6 in [false, true] {
         check(1, ipv6, true);
         check(2, ipv6, true);
+    }
+    // Both WAN peers use the same link-local address. The scope must select
+    // the intended interface rather than relying on the default route.
+    for n in 1..=2 {
+        let result = rt
+            .block_on(probe_target(
+                &format!("w{n}"),
+                format!("fd00:{n}::1").parse().unwrap(),
+                &WanProbeTarget::Icmp { address: "fe80::53".parse().unwrap() },
+                Duration::from_secs(2),
+                0x0100_0000 | n,
+            ))
+            .unwrap();
+        assert!(result.is_some(), "link-local WAN{n} probe failed");
     }
     // Carrier and ICMP stay healthy; only WAN1's application responders stop.
     peers[0].stop();

@@ -73,8 +73,20 @@ pub(super) async fn ping_ip(
                     [128, 0, 0, 0, (id >> 8) as u8, id as u8, (seq >> 8) as u8, seq as u8];
                 // Linux computes the ICMPv6 checksum, including its IPv6 pseudo-header.
                 let start = Instant::now();
-                if socket.send_to(&request, &SockAddr::from(SocketAddr::from((target, 0)))).is_err()
-                {
+                let scope_id = if target.is_unicast_link_local() {
+                    let name = std::ffi::CString::new(dev.as_bytes())
+                        .map_err(|e| ProbeError::Config(e.to_string()))?;
+                    // SAFETY: name is a valid NUL-terminated interface name.
+                    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+                    if index == 0 {
+                        return Err(ProbeError::Socket(std::io::Error::last_os_error()));
+                    }
+                    index
+                } else {
+                    0
+                };
+                let peer = std::net::SocketAddrV6::new(target, 0, 0, scope_id);
+                if socket.send_to(&request, &SockAddr::from(peer)).is_err() {
                     return Ok(None);
                 }
                 let mut buf = [std::mem::MaybeUninit::<u8>::new(0); 1500];

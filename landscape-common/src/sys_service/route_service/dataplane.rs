@@ -40,8 +40,11 @@ pub trait RouteTableDataplane: Send + Sync {
     async fn sync_kernel_default_ipv4(&self, nexthops: &[RouteTargetInfo]) -> bool;
 
     /// Own only dedicated, tagged rules/table for unmarked host traffic.
-    async fn sync_router_wan_policy(&self, _policy: Option<&super::RouterWanPolicy>) -> bool {
-        true
+    async fn sync_router_wan_policy(
+        &self,
+        _policy: Option<&super::RouterWanPolicy>,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     /// Recreate the LAN verdict-cache inner maps (invalidate all cached

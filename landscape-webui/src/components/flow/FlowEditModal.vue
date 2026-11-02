@@ -333,6 +333,15 @@ function normalizeFlowTargets(
               ]"
             />
           </n-form-item>
+          <n-text depth="3">{{ t("flow.failover.connection_limits") }}</n-text>
+          <n-alert
+            v-if="
+              rule.failover.failure_connection_policy === 'new_connections_only'
+            "
+            type="warning"
+          >
+            {{ t("flow.failover.failed_connection_warning") }}
+          </n-alert>
         </n-collapse-item>
       </n-collapse>
       <n-alert v-if="ordered_targets" type="info" style="margin-bottom: 16px">{{

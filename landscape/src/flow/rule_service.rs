@@ -106,10 +106,13 @@ impl FlowRuleService {
     /// contents against the route service's WAN state.
     async fn sync_all_flow_wan_targets(&self) {
         let _guard = self.target_sync.lock().await;
-        let configs = self.store.list().await.unwrap_or_else(|error| {
-            tracing::error!("failed to load flow configs for wan target sync: {error:?}");
-            Vec::new()
-        });
+        let configs = match self.store.list().await {
+            Ok(configs) => configs,
+            Err(error) => {
+                tracing::error!("failed to load flow configs for wan target sync: {error:?}");
+                return;
+            }
+        };
         self.route_service.sync_flow_wan_targets(&configs).await;
         let mut bindings = Vec::new();
         for id in std::iter::once(0).chain(configs.iter().map(|c| c.flow_id)) {
@@ -195,7 +198,76 @@ impl ConfigStoreController for FlowRuleService {
 
     async fn notify_deleted(&self, old: Self::Config) {
         self.refresh_flow_matches().await;
-        let _guard = self.target_sync.lock().await;
-        self.route_service.clear_flow_wan_targets(old.flow_id).await;
+        {
+            let _guard = self.target_sync.lock().await;
+            self.route_service.clear_flow_wan_targets(old.flow_id).await;
+        }
+        self.sync_all_flow_wan_targets().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use landscape_common::flow::dataplane::NoopFlowRuleDataplane;
+    use landscape_common::sys_service::route_service::{
+        RouteOwner, RouteTargetInfo, WanRouteTarget,
+    };
+
+    #[tokio::test]
+    async fn deleting_default_owner_immediately_refreshes_followed_dns_binding() {
+        let provider = LandscapeDBServiceProvider::mem_test_db().await;
+        let routes = landscape_core::route::test_used_ip_route();
+        let primary = Uuid::new_v4();
+        let backup = Uuid::new_v4();
+        for (id, name, index, default) in
+            [(primary, "wan-main", 1, true), (backup, "wan-backup", 2, false)]
+        {
+            routes
+                .insert_ipv4_wan_route(
+                    &RouteOwner::Link(id),
+                    WanRouteTarget::link(
+                        index,
+                        RouteTargetInfo::new_gateway_v4(
+                            u32::from(index),
+                            name,
+                            None,
+                            format!("192.0.2.{index}").parse().unwrap(),
+                            "192.0.2.254".parse().unwrap(),
+                            default,
+                        ),
+                    ),
+                )
+                .await;
+        }
+        let config: FlowConfig = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(), "enable": true, "flow_id": 9,
+            "flow_match_rules": [], "remark": "test",
+            "flow_targets": [{"target": {"t": "interface", "link_id": backup, "name": "wan-backup"}, "weight": 1}],
+            "failover": {"mode": "primary_backup", "bind_default_flow": true}
+        })).unwrap();
+        provider.flow_rule_store().upsert(config.clone()).await.unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+        // Construct without periodic observers: the deletion itself must
+        // refresh the binding and notify DNS, with no timer/route event help.
+        let service = FlowRuleService {
+            store: provider.flow_rule_store(),
+            dns_events_tx: tx,
+            route_service: routes,
+            dataplane: Arc::new(NoopFlowRuleDataplane),
+            target_sync: Default::default(),
+            dns_bindings: Default::default(),
+        };
+        service.sync_all_flow_wan_targets().await;
+        assert_eq!(service.route_service.dns_wan_binding(0).await.ipv4.unwrap().0, "wan-backup");
+        while rx.try_recv().is_ok() {}
+        service.delete_flow_cascade(config.id).await.unwrap();
+        let bindings = service.dns_bindings.lock().unwrap();
+        assert_eq!(
+            bindings.iter().find(|(id, _)| *id == 0).unwrap().1.ipv4.as_ref().unwrap().0,
+            "wan-main"
+        );
+        assert!(!bindings.iter().any(|(id, _)| *id == 9));
+        assert!(matches!(rx.try_recv(), Ok(DnsEvent::RulesChanged { flow_id: None })));
     }
 }

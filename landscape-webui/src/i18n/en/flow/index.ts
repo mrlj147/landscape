@@ -6,7 +6,7 @@ export default {
       priority_changed: "Primary/backup order changed",
       link_unavailable: "Previous link or route unavailable",
       health_failure: "Previous exit failed health checks",
-      health_unknown: "Previous exit unknown; use a healthy WAN",
+      health_unknown: "Previous exit unknown; reselect exit",
       unknown_grace_expired: "Unknown-state grace expired",
       recovery: "Higher-priority WAN recovered and stabilized",
     },
@@ -32,6 +32,13 @@ export default {
     new_connections_only: "New connections only; preserve existing exits",
     reset_existing:
       "Reselect existing exits (applications may need to reconnect)",
+    router_applied: "Host routing policy applied",
+    router_failed: "Host routing policy failed; retrying",
+    router_pending: "Host routing policy awaiting application",
+    connection_limits:
+      "TCP/UDP exits follow the five-tuple, expiring after 2 hours of TCP idle time or 120 seconds of UDP idle time. Restart or cache eviction also drops bindings. Reselection sends no TCP RST and does not clear NAT; applications may need to reconnect.",
+    failed_connection_warning:
+      "Preserved sessions can stay on a failed WAN. Active DNS or game UDP sessions may keep failing until they become idle long enough to expire or their exit is reselected.",
     active: "Active exit",
     no_exit: "No available exit",
     status_unavailable: "Exit status unavailable",
@@ -50,7 +57,7 @@ export default {
     restore_weighted: "Restore weighted routing mode",
     enable: "Enable WAN failover",
     auto_failback: "Return to primary WAN after recovery",
-    hint: "Order exits from primary to backups. Enable health checks on every WAN first; only healthy exits carry traffic. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
+    hint: "Order exits from primary to backups. Enable health checks on every WAN first; IPv6-enabled WANs require IPv6 probes. Unknown exits follow the grace/fail-open settings. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
     invalid_targets:
       "Failover requires at least two distinct WAN links and does not support container exits.",
     primary: "Primary WAN",

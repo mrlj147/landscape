@@ -47,11 +47,11 @@ struct CurrentSchemaState {
 // reached via the manual step-based rollback path.
 pub const RELEASE_BOUNDARIES: &[ReleaseBoundary] = &[
     ReleaseBoundary {
-        version: "0.28.0",
-        terminal_migration: "m20261031_053957_ddns_per_record_limit",
+        version: "0.27.3",
+        terminal_migration: "m20261008_240001_wan_link_health_check",
     },
     ReleaseBoundary {
-        version: "0.28.0-wan-failover.1",
+        version: "0.28.0",
         terminal_migration: "m20261102_000000_flow_failover",
     },
 ];

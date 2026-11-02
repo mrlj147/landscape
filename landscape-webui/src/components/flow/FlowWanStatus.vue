@@ -32,6 +32,28 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
           t("flow.failover.remaining", { seconds: row.retry_after_secs })
         }}</n-text>
       </n-space>
+      <n-alert
+        v-if="row.router_policy_applied != null"
+        :type="
+          row.router_policy_applied
+            ? 'success'
+            : row.router_policy_error
+              ? 'error'
+              : 'warning'
+        "
+        :show-icon="false"
+      >
+        {{
+          t(
+            row.router_policy_applied
+              ? "flow.failover.router_applied"
+              : row.router_policy_error
+                ? "flow.failover.router_failed"
+                : "flow.failover.router_pending",
+          )
+        }}
+        <div v-if="row.router_policy_error">{{ row.router_policy_error }}</div>
+      </n-alert>
       <n-space>
         <n-tag
           v-for="candidate in row.candidates"

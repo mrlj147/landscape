@@ -81,6 +81,32 @@ impl LandscapeDBStore<Uuid> for WanLinkConfig {
 }
 
 impl WanLinkConfig {
+    /// Automatic failover must have evidence for every enabled address family.
+    /// Reused when saving a flow and when editing a WAN it already references.
+    pub fn validate_failover_health(&self) -> Result<(), ServiceConfigError> {
+        let (v4, v6) = match &self.health_check.probe {
+            WanHealthProbeConfig::Multi { groups } => (
+                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv4())),
+                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv6())),
+            ),
+            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
+                (*probe_gateway || targets.iter().any(|ip| ip.is_ipv4()), false)
+            }
+            WanHealthProbeConfig::Dns { .. } | WanHealthProbeConfig::Http { .. } => (true, false),
+        };
+        let ipv6_enabled =
+            self.pd.enable || matches!(self.v4.model, WanLinkV4Model::Static { ipv6: Some(_), .. });
+        if !self.health_check.enable || (self.v4.enable && !v4) || (ipv6_enabled && !v6) {
+            return Err(ServiceConfigError::InvalidConfig {
+                reason: format!(
+                    "WAN '{}' requires enabled health checks for every enabled address family before automatic failover (IPv4 probe: {v4}, IPv6 probe: {v6}); configure dual-stack probe groups when IPv6 is enabled",
+                    self.attach_iface_name,
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// True when the link has an acquisition/anchor intent.
     /// - PPP kinds: gated by the service switch (`v4.enable`); PD cannot bring
     ///   the session up on its own.
@@ -375,7 +401,8 @@ pub fn validate_probe_groups(groups: &[WanProbeGroup]) -> Result<(), ServiceConf
                 || ip.is_loopback()
                 || ip.is_multicast()
                 || matches!(ip, IpAddr::V4(v) if v.is_broadcast())
-                || matches!(ip, IpAddr::V6(v) if v.is_unicast_link_local())
+                || (matches!(ip, IpAddr::V6(v) if v.is_unicast_link_local())
+                    && !matches!(target, WanProbeTarget::Icmp { .. }))
             {
                 return Err(invalid(
                     "probe targets in each group must use one address family and routable unicast addresses",
@@ -665,6 +692,58 @@ mod tests {
             "attach_iface_name": "eth0"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn automatic_failover_requires_probes_for_enabled_families() {
+        let mut config = minimal();
+        config.v4.enable = true;
+        config.health_check.enable = true;
+        config.health_check.probe = WanHealthProbeConfig::Dns {
+            server: "223.5.5.5".parse().unwrap(),
+            domain: "www.baidu.com".into(),
+        };
+        assert!(config.validate_failover_health().is_ok());
+        config.pd.enable = true;
+        assert!(config.validate_failover_health().is_err());
+        config.health_check.probe = WanHealthProbeConfig::Multi {
+            groups: vec![
+                WanProbeGroup {
+                    name: "v4".into(),
+                    quorum: 1,
+                    targets: vec![WanProbeTarget::Icmp { address: "223.5.5.5".parse().unwrap() }],
+                },
+                WanProbeGroup {
+                    name: "v6".into(),
+                    quorum: 1,
+                    targets: vec![WanProbeTarget::Icmp {
+                        address: "2400:3200::1".parse().unwrap(),
+                    }],
+                },
+            ],
+        };
+        assert!(config.validate_failover_health().is_ok());
+        config.health_check.enable = false;
+        assert!(config.validate_failover_health().is_err());
+    }
+
+    #[test]
+    fn link_local_ipv6_is_supported_for_scoped_icmp_probes() {
+        let group = WanProbeGroup {
+            name: "gateway".into(),
+            quorum: 1,
+            targets: vec![WanProbeTarget::Icmp { address: "fe80::1".parse().unwrap() }],
+        };
+        assert!(validate_probe_groups(&[group]).is_ok());
+        let group = WanProbeGroup {
+            name: "DNS".into(),
+            quorum: 1,
+            targets: vec![WanProbeTarget::Dns {
+                server: "fe80::1".parse().unwrap(),
+                domain: "example.com".into(),
+            }],
+        };
+        assert!(validate_probe_groups(&[group]).is_err());
     }
 
     #[test]

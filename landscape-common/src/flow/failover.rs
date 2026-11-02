@@ -65,4 +65,8 @@ pub struct FlowWanStatus {
     pub retry_after_secs: Option<u64>,
     pub candidates: Vec<FlowWanCandidateStatus>,
     pub history: Vec<FlowWanSwitchEvent>,
+    /// None when this flow does not control the router's own traffic.
+    pub router_policy_applied: Option<bool>,
+    pub router_policy_error: Option<String>,
+    pub router_policy_checked_at_ms: Option<u64>,
 }

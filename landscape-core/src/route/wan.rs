@@ -322,15 +322,23 @@ impl IpRouteService {
                         _ = ticker.tick() => {}
                     }
                     service.reconcile_kernel_default_ipv4().await;
-                    let policy = service.router_wan_policy.read().await;
-                    if !service.dataplane.sync_router_wan_policy(policy.as_ref()).await {
-                        tracing::error!(
-                            "router WAN binding sync failed; retrying on next reconcile"
-                        );
-                    }
+                    service.reconcile_router_wan_policy().await;
                 }
             },
         );
+    }
+
+    pub(crate) async fn reconcile_router_wan_policy(&self) {
+        let policy = self.router_wan_policy.read().await;
+        let error = self.dataplane.sync_router_wan_policy(policy.as_ref()).await.err();
+        if let Some(error) = &error {
+            tracing::error!(%error, "router WAN binding sync failed; retrying on next reconcile");
+        }
+        *self.router_policy_applied.write().await = Some(super::RouterPolicyApplyState {
+            policy: policy.clone(),
+            error,
+            checked_at_ms: landscape_common::utils::time::now_ms(),
+        });
     }
 
     /// Drop every docker-owned WAN route, refresh the default router, and
