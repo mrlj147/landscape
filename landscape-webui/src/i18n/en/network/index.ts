@@ -55,7 +55,7 @@ export default {
     dns_ip: "Upstream DNS IPv4 / IPv6 address",
     multi: "Multiple targets / IPv4 + IPv6",
     multi_hint:
-      "Each group must meet its quorum. All groups within an address family must pass. IPv4 and IPv6 are evaluated and switched independently. Use one address family per group. An unprobed family stays Unknown and its exit is disabled after grace unless unknown fail-open is enabled.",
+      "Each group must meet its quorum. All groups within an address family must pass. Use one address family per group. With both probe switches on, families switch independently. Turning one off preserves its targets but sends no probes and follows the other family's result.",
     group_name: "Group name",
     quorum: "Required successful targets",
 
