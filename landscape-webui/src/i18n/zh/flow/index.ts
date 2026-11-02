@@ -39,7 +39,7 @@ export default {
     restore_weighted: "恢复权重分流模式",
     enable: "启用 WAN 主备切换",
     auto_failback: "主 WAN 恢复后自动切回",
-    hint: "出口从上到下依次为主 WAN、备用 WAN。请先启用每条 WAN 的健康检测；只有检测正常的出口才会承接流量。关闭后固定走主 WAN，即使主 WAN 无法访问外网也不会切到备用。切换时已有连接可能需要重连。",
+    hint: "出口从上到下依次为主 WAN、备用 WAN。请先启用每条 WAN 的健康检测；优先使用检测正常的出口，未知状态按宽限期设置处理。关闭后固定走主 WAN，即使主 WAN 无法访问外网也不会切到备用。切换时已有连接可能需要重连。",
     invalid_targets: "主备切换至少需要两条不同的 WAN，不能选择容器出口。",
     primary: "主 WAN",
     backup: "备用 WAN {index}",

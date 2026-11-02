@@ -21,7 +21,7 @@ struct route_conn_value {
     u64 generation;
     u64 seen_ns;
     u32 flow_id;
-    u32 pad;
+    __be32 tcp_syn_seq;
     union {
         struct route4_target_info v4;
         struct route6_target_info v6;
@@ -88,11 +88,13 @@ route4_select_connection(const struct route4_context *c, const struct route4_slo
     struct route_conn_key key = {};
     route4_connection_key(c, &key, false);
     struct route_conn_value *v = route_connection(&key, slot->flow_id, *generation);
-    if (v) return &v->target.v4;
+    if (v && (!c->tcp_syn || c->tcp_syn_seq == v->tcp_syn_seq)) return &v->target.v4;
     struct route4_target_info *target = bpf_map_lookup_elem(&rt4_slot_map, slot);
     if (!target) return NULL;
-    struct route_conn_value fresh = {
-        .generation = *generation, .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
+    struct route_conn_value fresh = {.generation = *generation,
+                                     .seen_ns = bpf_ktime_get_ns(),
+                                     .flow_id = slot->flow_id,
+                                     .tcp_syn_seq = c->tcp_syn_seq};
     fresh.target.v4 = *target;
     bpf_map_update_elem(&rt_connections, &key, &fresh, BPF_ANY);
     return target;
@@ -105,11 +107,13 @@ route6_select_connection(const struct route6_context *c, const struct route6_slo
     struct route_conn_key key = {};
     route6_connection_key(c, &key, false);
     struct route_conn_value *v = route_connection(&key, slot->flow_id, *generation);
-    if (v) return &v->target.v6;
+    if (v && (!c->tcp_syn || c->tcp_syn_seq == v->tcp_syn_seq)) return &v->target.v6;
     struct route6_target_info *target = bpf_map_lookup_elem(&rt6_slot_map, slot);
     if (!target) return NULL;
-    struct route_conn_value fresh = {
-        .generation = *generation, .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
+    struct route_conn_value fresh = {.generation = *generation,
+                                     .seen_ns = bpf_ktime_get_ns(),
+                                     .flow_id = slot->flow_id,
+                                     .tcp_syn_seq = c->tcp_syn_seq};
     fresh.target.v6 = *target;
     bpf_map_update_elem(&rt_connections, &key, &fresh, BPF_ANY);
     return target;

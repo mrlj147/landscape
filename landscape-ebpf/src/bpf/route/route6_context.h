@@ -18,6 +18,8 @@ struct route6_context {
     __be16 src_port;
     __be16 dst_port;
     u8 smac[6];
+    u8 tcp_syn;
+    __be32 tcp_syn_seq;
 };
 
 static __always_inline int route6_read_context_from_scan(struct __sk_buff *skb,
@@ -51,6 +53,14 @@ static __always_inline int route6_read_context_from_scan(struct __sk_buff *skb,
             context->src_port = ports[0];
             context->dst_port = ports[1];
             context->l4_protocol = off.l4_protocol;
+            if (context->l4_protocol == 6) {
+                struct tcphdr tcp;
+                if (bpf_skb_load_bytes(skb, off.l4_offset, &tcp, sizeof(tcp)) == 0 && tcp.syn &&
+                    !tcp.ack) {
+                    context->tcp_syn = 1;
+                    context->tcp_syn_seq = tcp.seq;
+                }
+            }
         }
     }
     return TC_ACT_OK;

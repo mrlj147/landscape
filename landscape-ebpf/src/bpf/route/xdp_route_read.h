@@ -29,6 +29,12 @@ static __always_inline int xdp_read_ipv4(struct xdp_md *ctx, struct route4_conte
             context->src_port = ports[0];
             context->dst_port = ports[1];
             context->l4_protocol = iph->protocol;
+            struct tcphdr *tcp = (void *)ports;
+            if (context->l4_protocol == 6 && (void *)(tcp + 1) <= data_end && tcp->syn &&
+                !tcp->ack) {
+                context->tcp_syn = 1;
+                context->tcp_syn_seq = tcp->seq;
+            }
         }
     }
     return 0;
@@ -56,6 +62,12 @@ static __always_inline int xdp_read_ipv6(struct xdp_md *ctx, struct route6_conte
             context->src_port = ports[0];
             context->dst_port = ports[1];
             context->l4_protocol = off.l4_protocol;
+            struct tcphdr *tcp = (void *)ports;
+            if (context->l4_protocol == 6 && (void *)(tcp + 1) <= data_end && tcp->syn &&
+                !tcp->ack) {
+                context->tcp_syn = 1;
+                context->tcp_syn_seq = tcp->seq;
+            }
         }
     }
     return 0;

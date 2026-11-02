@@ -87,7 +87,7 @@ async fn health(routes: &IpRouteService, id: Uuid, reachable: bool, ipv6: bool) 
     }
     routes.update_link_health_for_family(eval.info().clone(), ipv6).await;
 }
-fn packet(port: u16, udp: bool, ipv6: bool) -> Vec<u8> {
+fn packet(port: u16, udp: bool, ipv6: bool, syn: bool) -> Vec<u8> {
     let ethernet = PacketBuilder::ethernet2([2, 0, 0, 0, 0, 1], [2, 0, 0, 0, 0, 2]);
     let base = if ipv6 {
         ethernet.ipv6(
@@ -102,7 +102,12 @@ fn packet(port: u16, udp: bool, ipv6: bool) -> Vec<u8> {
     if udp {
         base.udp(port, 443).write(&mut out, b"failover").unwrap();
     } else {
-        base.tcp(port, 443, 1, 65535).ack(1).write(&mut out, b"failover").unwrap();
+        let tcp = base.tcp(port, 443, 99, 65535);
+        if syn {
+            tcp.syn().write(&mut out, b"").unwrap();
+        } else {
+            tcp.ack(1).write(&mut out, b"failover").unwrap();
+        }
     }
     out
 }
@@ -216,7 +221,7 @@ fn real_traffic(ipv6: bool) {
     });
     let send = |port, udp| {
         let _client = client.enter();
-        send_raw_packet(lan.peer(), &packet(port, udp, ipv6));
+        send_raw_packet(lan.peer(), &packet(port, udp, ipv6, false));
     };
     let attach_dummies = || {
         let _peer = uplink.enter();
@@ -264,6 +269,16 @@ fn real_traffic(ipv6: bool) {
         dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 4
     });
     drop(links);
+    // A new TCP SYN reusing an old tuple must select the recovered primary.
+    let links = attach_dummies();
+    {
+        let _client = client.enter();
+        send_raw_packet(lan.peer(), &packet(10001, false, ipv6, true));
+    }
+    wait_for("new SYN reusing a tuple returns WAN1", Duration::from_secs(3), || {
+        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 5
+    });
+    drop(links);
     // Carrier stays up, but the remote service is unreachable (address removed).
     {
         let _peer = uplink.enter();
@@ -278,7 +293,7 @@ fn real_traffic(ipv6: bool) {
     let _links = attach_dummies();
     send(10005, false);
     wait_for("manual mode still uses WAN1 without Internet", Duration::from_secs(3), || {
-        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 5
+        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 6
     });
     settle(100);
     assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 4);

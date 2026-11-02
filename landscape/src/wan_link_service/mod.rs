@@ -7,6 +7,8 @@ mod nat4;
 mod nat6;
 mod pd;
 pub mod probe;
+#[cfg(test)]
+mod probe_netns_tests;
 mod v4;
 
 use std::collections::HashMap;

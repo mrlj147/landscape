@@ -17,6 +17,7 @@ permissions:
   contents: read
 jobs:
   test:
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     env:
       RUST_LOG: warn
@@ -27,10 +28,20 @@ jobs:
         with:
           toolchain: 1.98.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p landscape-common -p landscape-core -p landscape-database -p migration --lib
+      - name: State, configuration and migration tests
+        run: |
+          cargo test --locked -p landscape-common -p landscape-core -p landscape-database -p migration --lib > "$RUNNER_TEMP/wan-state.log" 2>&1 || { tail -100 "$RUNNER_TEMP/wan-state.log"; exit 1; }
+          grep 'test result:' "$RUNNER_TEMP/wan-state.log"
       - run: |
           cargo test --locked -p landscape --lib wan_link_service::
-      - run: cargo test --locked -p landscape-dns --lib
+      - name: Compile privileged health and DNS socket tests
+        run: cargo test --locked -p landscape -p landscape-dns --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-service-build.json"
+      - name: Probe confinement and DNS socket bindings
+        run: |
+          service_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-service-build.json" | tail -1)
+          dns_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_dns" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-service-build.json" | tail -1)
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 "$service_test_bin" wan_link_service::probe_netns_tests:: --ignored --test-threads=1 --nocapture
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 timeout 300 "$dns_test_bin" --test-threads=2
       - run: cargo test --locked -p landscape-webserver export_openapi_json
       - name: Compile isolated network tests
         run: cargo test --locked -p landscape-ebpf --features test-route,test-chain --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
