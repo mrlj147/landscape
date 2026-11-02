@@ -928,7 +928,11 @@ async fn running_health_rebinds_on_ipv4_renewal_and_ipv6_pd_address_change() {
         let (_cfg_tx, cfg_rx) = watch::channel(config);
         let (_reconfig_tx, reconfig_rx) = broadcast::channel(8);
         let link_status = ServiceHandle::new();
+        // Match the production link lifecycle: Stop -> Running is rejected,
+        // and would leave the later Stopping transition unable to cancel.
+        link_status.just_change_status(ServiceStatus::Staring);
         link_status.just_change_status(ServiceStatus::Running);
+        assert!(link_status.is_running());
         let supervisor = tokio::spawn(run_dependent_section(
             link_status.clone(),
             board(),
@@ -1008,6 +1012,7 @@ async fn running_health_rebinds_on_ipv4_renewal_and_ipv6_pd_address_change() {
         wait_healthy().await;
         assert_eq!(starts.load(Ordering::SeqCst), if ipv6_change { 1 } else { 2 });
         link_status.just_change_status(ServiceStatus::Stopping);
+        assert!(link_status.stop_token().is_cancelled());
         tokio::time::timeout(Duration::from_secs(2), supervisor).await.unwrap().unwrap();
         assert!(routes.get_link_health_for_family(id, false).await.is_none());
         assert!(routes.get_link_health_for_family(id, true).await.is_none());
