@@ -137,6 +137,24 @@ export default {
     confirm_import: "Confirm import from clipboard?",
   },
   check_domain: {
+    error_upstream_timeout:
+      "Upstream DNS lookup timed out. Check reachability through this Flow or add a DNS server reachable through that WAN. Cached records do not indicate success for this lookup.",
+    error_upstream_network:
+      "Upstream DNS connection failed. Check the WAN, source binding and routes.",
+    error_upstream_failure:
+      "Upstream DNS lookup failed. See service logs for transport details.",
+    error_upstream_response: "The DNS upstream returned an error response.",
+    error_no_matching_rule:
+      "No matching DNS upstream rule. Existing cached records do not indicate a successful upstream lookup.",
+    error_flow_unavailable:
+      "The DNS service for this Flow is stopped or does not exist.",
+    error_invalid_domain: "Invalid domain name.",
+    nxdomain:
+      "The upstream confirmed that this domain does not exist (NXDOMAIN).",
+    no_data:
+      "The lookup succeeded but returned no records of this type (NODATA).",
+    response_code: "DNS response code: {code}",
+
     enter_domain: "Enter domain to query",
     test_flow_query: "Test flow: {flow_id} domain query (results not cached)",
     query_instruction:

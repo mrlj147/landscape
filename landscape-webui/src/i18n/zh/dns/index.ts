@@ -133,6 +133,20 @@ export default {
     confirm_import: "确定从剪贴板导入吗?",
   },
   check_domain: {
+    error_upstream_timeout:
+      "上游 DNS 查询超时。请检查该 Flow 出口到上游的连通性，或添加该线路可访问的备用 DNS。缓存结果不代表本次查询成功。",
+    error_upstream_network:
+      "上游 DNS 网络连接失败，请检查出口、绑定地址及路由。",
+    error_upstream_failure: "上游 DNS 查询失败，详细传输错误请查看服务日志。",
+    error_upstream_response: "上游 DNS 返回错误响应。",
+    error_no_matching_rule:
+      "没有匹配的 DNS 上游规则；下方已有缓存不代表上游查询成功。",
+    error_flow_unavailable: "该 Flow 的 DNS 服务未运行或不存在。",
+    error_invalid_domain: "域名格式无效。",
+    nxdomain: "上游确认该域名不存在（NXDOMAIN）。",
+    no_data: "上游查询成功，但没有返回该类型的记录（NODATA）。",
+    response_code: "DNS 响应码：{code}",
+
     enter_domain: "请输入待查询域名",
     test_flow_query: "测试 flow: {flow_id} 域名查询 (结果不缓存)",
     query_instruction: "输入域名后, 点击右侧按钮或使用回车",

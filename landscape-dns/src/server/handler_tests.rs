@@ -403,6 +403,81 @@ mod tests {
         });
     }
 
+    /// Real upstream sockets exercise the same check path as the web UI.
+    /// A stale cache must not hide an upstream timeout or protocol failure.
+    #[cfg(feature = "pool-native")]
+    #[test]
+    fn check_domain_reports_upstream_failures_without_losing_cached_answers() {
+        use crate::upstream::test_util::{ScriptedAction, ScriptedDnsServer};
+        use landscape_common::dns::check::DnsCheckError;
+        run_async_test(async {
+            for native in [false, true] {
+                for (action, error, code) in [
+                    (ScriptedAction::HoldOpen, Some(DnsCheckError::UpstreamTimeout), None),
+                    (
+                        ScriptedAction::Code(ResponseCode::Refused),
+                        Some(DnsCheckError::UpstreamResponse),
+                        Some(5),
+                    ),
+                    (ScriptedAction::Code(ResponseCode::NXDomain), None, Some(3)),
+                    (ScriptedAction::Code(ResponseCode::NoError), None, Some(0)),
+                ] {
+                    let mut upstream = ScriptedDnsServer::spawn("127.0.0.1".parse().unwrap()).await;
+                    for _ in 0..32 {
+                        upstream.push_udp(action.clone());
+                        upstream.push_tcp(action.clone());
+                    }
+                    let rule = DNSRuntimeRule {
+                        id: Uuid::new_v4(),
+                        flow_id: 254,
+                        resolve_mode: DnsUpstreamConfig {
+                            ips: vec!["127.0.0.1".parse().unwrap()],
+                            port: Some(upstream.port()),
+                            use_experimental_pool: Some(native),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    let rule_id = rule.id;
+                    let handler = make_test_handler(vec![rule], vec![]);
+                    let domain = ParsedDomain::new("diagnostic.example.").unwrap();
+                    handler
+                        .insert(
+                            domain.raw(),
+                            RecordType::A,
+                            vec![sample_a_record(domain.raw(), 60, Ipv4Addr::new(192, 0, 2, 1))],
+                            ResponseCode::NoError,
+                            &DnsRuntimeMarkInfo { mark: FlowMark::default(), priority: 0 },
+                            FilterResult::Unfilter,
+                            Some(rule_id),
+                            Some(0),
+                        )
+                        .await;
+                    let result = handler.check_domain(&domain, RecordType::A, false).await;
+                    upstream.kill();
+                    assert!(upstream.queries() > 0, "must send a real query");
+                    assert_eq!(result.rule_id, Some(rule_id));
+                    assert_eq!(result.error, error, "native={native}, action={action:?}");
+                    assert_eq!(result.response_code, code);
+                    assert_eq!(result.cache_records.as_ref().unwrap().len(), 1);
+                    if error.is_none() {
+                        assert!(result.records.as_ref().unwrap().is_empty());
+                    } else {
+                        assert!(result.records.is_none());
+                    }
+                    let cached = handler
+                        .snapshot
+                        .load_full()
+                        .cache
+                        .lookup(&domain, RecordType::A)
+                        .await
+                        .unwrap();
+                    assert_eq!(cached.0.len(), 1, "diagnostics must leave cache untouched");
+                }
+            }
+        });
+    }
+
     #[test]
     fn check_domain_applies_filter_when_requested() {
         run_async_test(async {
