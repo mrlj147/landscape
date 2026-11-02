@@ -124,7 +124,9 @@ pub(crate) fn create_resolver(
     config: DnsUpstreamConfig,
 ) -> Option<LandscapeResolver> {
     // Opt-in gate: only explicitly opted-in upstreams use the self-managed pool.
-    if config.use_experimental_pool.unwrap_or(false) {
+    if config.use_experimental_pool.unwrap_or(false)
+        && (cfg!(feature = "pool-native") || config.bind_config.follow_flow.is_none())
+    {
         #[cfg(feature = "pool-native")]
         {
             let provider =

@@ -25,6 +25,7 @@ pub struct FlowRuleService {
     route_service: IpRouteService,
     dataplane: Arc<dyn FlowRuleDataplane>,
     target_sync: Arc<tokio::sync::Mutex<()>>,
+    dns_bindings: Arc<std::sync::Mutex<Vec<(u32, landscape_common::dns::bind::DnsWanBinding)>>>,
 }
 
 impl FlowRuleService {
@@ -42,6 +43,7 @@ impl FlowRuleService {
             route_service,
             dataplane,
             target_sync: Default::default(),
+            dns_bindings: Default::default(),
         };
         // Subscribe before the initial sync so no WanRouteEvent can slip in
         // between the sync and the subscription; events arriving during the
@@ -109,6 +111,23 @@ impl FlowRuleService {
             Vec::new()
         });
         self.route_service.sync_flow_wan_targets(&configs).await;
+        let mut bindings = Vec::new();
+        for id in std::iter::once(0).chain(configs.iter().map(|c| c.flow_id)) {
+            bindings.push((id, self.route_service.dns_wan_binding(id).await));
+        }
+        bindings.sort_by_key(|(id, _)| *id);
+        let changed = {
+            let mut old = self.dns_bindings.lock().unwrap_or_else(|e| e.into_inner());
+            if *old == bindings {
+                false
+            } else {
+                *old = bindings;
+                true
+            }
+        };
+        if changed {
+            let _ = self.dns_events_tx.send(DnsEvent::RulesChanged { flow_id: None }).await;
+        }
     }
 
     pub async fn delete_flow_cascade(&self, id: Uuid) -> Result<Option<FlowConfig>, DbError> {

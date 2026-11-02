@@ -13,13 +13,19 @@ struct route_conn_key {
     u8 ipv6;
     u8 pad[2];
 };
-struct route_policy_key { u32 flow_id; u32 ipv6; };
+struct route_policy_key {
+    u32 flow_id;
+    u32 ipv6;
+};
 struct route_conn_value {
     u64 generation;
     u64 seen_ns;
     u32 flow_id;
     u32 pad;
-    union { struct route4_target_info v4; struct route6_target_info v6; } target;
+    union {
+        struct route4_target_info v4;
+        struct route6_target_info v6;
+    } target;
 };
 _Static_assert(sizeof(struct route_conn_key) == 40, "route conn key ABI");
 _Static_assert(sizeof(struct route_conn_value) == 56, "route conn value ABI");
@@ -63,20 +69,19 @@ static __always_inline void route6_connection_key(const struct route6_context *c
 static __always_inline bool route_conn_supported(u8 protocol) {
     return protocol == 6 || protocol == 17;
 }
-static __always_inline struct route_conn_value *route_connection(
-    const struct route_conn_key *key, u32 flow_id, u64 generation) {
+static __always_inline struct route_conn_value *route_connection(const struct route_conn_key *key,
+                                                                 u32 flow_id, u64 generation) {
     struct route_conn_value *v = bpf_map_lookup_elem(&rt_connections, key);
     u64 now = bpf_ktime_get_ns();
     u64 idle = key->protocol == 6 ? 7200000000000ULL : 120000000000ULL;
-    if (v && v->flow_id == flow_id && v->generation == generation &&
-        now - v->seen_ns < idle) {
+    if (v && v->flow_id == flow_id && v->generation == generation && now - v->seen_ns < idle) {
         v->seen_ns = now;
         return v;
     }
     return NULL;
 }
-static __always_inline struct route4_target_info *route4_select_connection(
-    const struct route4_context *c, const struct route4_slot_key *slot) {
+static __always_inline struct route4_target_info *
+route4_select_connection(const struct route4_context *c, const struct route4_slot_key *slot) {
     u64 *generation = route_policy(slot->flow_id, false);
     if (!generation || !route_conn_supported(c->l4_protocol))
         return bpf_map_lookup_elem(&rt4_slot_map, slot);
@@ -86,14 +91,14 @@ static __always_inline struct route4_target_info *route4_select_connection(
     if (v) return &v->target.v4;
     struct route4_target_info *target = bpf_map_lookup_elem(&rt4_slot_map, slot);
     if (!target) return NULL;
-    struct route_conn_value fresh = {.generation = *generation,
-        .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
+    struct route_conn_value fresh = {
+        .generation = *generation, .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
     fresh.target.v4 = *target;
     bpf_map_update_elem(&rt_connections, &key, &fresh, BPF_ANY);
     return target;
 }
-static __always_inline struct route6_target_info *route6_select_connection(
-    const struct route6_context *c, const struct route6_slot_key *slot) {
+static __always_inline struct route6_target_info *
+route6_select_connection(const struct route6_context *c, const struct route6_slot_key *slot) {
     u64 *generation = route_policy(slot->flow_id, true);
     if (!generation || !route_conn_supported(c->l4_protocol))
         return bpf_map_lookup_elem(&rt6_slot_map, slot);
@@ -103,8 +108,8 @@ static __always_inline struct route6_target_info *route6_select_connection(
     if (v) return &v->target.v6;
     struct route6_target_info *target = bpf_map_lookup_elem(&rt6_slot_map, slot);
     if (!target) return NULL;
-    struct route_conn_value fresh = {.generation = *generation,
-        .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
+    struct route_conn_value fresh = {
+        .generation = *generation, .seen_ns = bpf_ktime_get_ns(), .flow_id = slot->flow_id};
     fresh.target.v6 = *target;
     bpf_map_update_elem(&rt_connections, &key, &fresh, BPF_ANY);
     return target;

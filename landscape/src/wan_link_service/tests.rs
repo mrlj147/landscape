@@ -657,6 +657,7 @@ fn health_config(
     targets: Vec<std::net::Ipv4Addr>,
 ) -> landscape_common::wan_link::RuntimeWanLinkHealthCheckConfig {
     landscape_common::wan_link::RuntimeWanLinkHealthCheckConfig {
+        socket_mark: 0,
         enable: true,
         probe: landscape_common::wan_link::RuntimeWanHealthProbe::Icmp {
             targets,

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use landscape_common::dns::config::DnsUpstreamConfig;
+use landscape_common::dns::{bind::DnsBindConfig, config::DnsUpstreamConfig};
 use uuid::Uuid;
 
 use crate::upstream::{LandscapeResolver, create_resolver};
@@ -31,7 +31,7 @@ type ResolverKey = (u32, Uuid);
 /// entries no rule references anymore if this ever becomes a problem.
 #[derive(Debug, Default)]
 pub struct ResolvePool {
-    resolvers: RwLock<HashMap<ResolverKey, Arc<LandscapeResolver>>>,
+    resolvers: RwLock<HashMap<ResolverKey, (DnsBindConfig, Arc<LandscapeResolver>)>>,
 }
 
 impl ResolvePool {
@@ -44,15 +44,25 @@ impl ResolvePool {
         dns_mark: u32,
         upstream: &DnsUpstreamConfig,
     ) -> Option<Arc<LandscapeResolver>> {
+        let dns_mark = upstream.bind_config.socket_mark(dns_mark);
         let key = (dns_mark, upstream.id);
-        if let Some(resolver) = self.resolvers.read().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        if let Some((binding, resolver)) =
+            self.resolvers.read().unwrap_or_else(|e| e.into_inner()).get(&key)
+            && binding == &upstream.bind_config
+        {
             return Some(resolver.clone());
         }
 
         let resolver = Arc::new(create_resolver(flow_id, dns_mark, upstream.clone())?);
 
         let mut resolvers = self.resolvers.write().unwrap_or_else(|e| e.into_inner());
-        Some(resolvers.entry(key).or_insert_with(|| resolver.clone()).clone())
+        if let Some((binding, current)) = resolvers.get(&key)
+            && binding == &upstream.bind_config
+        {
+            return Some(current.clone());
+        }
+        resolvers.insert(key, (upstream.bind_config.clone(), resolver.clone()));
+        Some(resolver)
     }
 
     /// Unconditionally drops every resolver for the given upstream ids. Old
@@ -81,6 +91,23 @@ mod tests {
 
     fn upstream() -> DnsUpstreamConfig {
         DnsUpstreamConfig::default()
+    }
+
+    #[tokio::test]
+    async fn wan_address_change_replaces_transport_pool() {
+        let pool = ResolvePool::default();
+        let mut upstream = upstream();
+        upstream.bind_config.follow_flow = Some(7);
+        upstream.bind_config.resolved_wan = Some(landscape_common::dns::bind::DnsWanBinding {
+            ipv4: Some(("wan1".into(), "192.0.2.1".parse().unwrap())),
+            ipv6: None,
+        });
+        let first = pool.get_or_create(3, 0x8003, &upstream).unwrap();
+        upstream.bind_config.resolved_wan.as_mut().unwrap().ipv4 =
+            Some(("wan2".into(), "198.51.100.1".parse().unwrap()));
+        let second = pool.get_or_create(3, 0x8003, &upstream).unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(pool.keys(), vec![(0x8007, upstream.id)]);
     }
 
     #[tokio::test]

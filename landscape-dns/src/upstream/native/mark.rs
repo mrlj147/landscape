@@ -9,7 +9,7 @@ use landscape_common::dns::bind::DnsBindConfig;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::net::{TcpSocket, TcpStream as TokioTcpStream};
 
-use crate::upstream::socket::set_socket_mark;
+use crate::upstream::socket::{bind_wan_device, set_socket_mark};
 
 /// Creates marked / source-bound sockets for upstream connections.
 ///
@@ -22,6 +22,7 @@ pub struct MarkRuntimeProvider {
     mark_value: u32,
     bind_addr4: Option<Ipv4Addr>,
     bind_addr6: Option<Ipv6Addr>,
+    bind_config: DnsBindConfig,
 }
 
 impl fmt::Debug for MarkRuntimeProvider {
@@ -34,8 +35,14 @@ impl MarkRuntimeProvider {
     /// Create a provider applying `mark_value` (SO_MARK) and the optional
     /// source-address bindings to every socket it creates.
     pub fn new(mark_value: u32, bind_config: DnsBindConfig) -> Self {
-        let DnsBindConfig { bind_addr4, bind_addr6 } = bind_config;
-        MarkRuntimeProvider { mark_value, bind_addr4, bind_addr6 }
+        let mark_value = bind_config.socket_mark(mark_value);
+        let bind_addr4 = bind_config
+            .source_addr(false)
+            .and_then(|ip| if let IpAddr::V4(ip) = ip { Some(ip) } else { None });
+        let bind_addr6 = bind_config
+            .source_addr(true)
+            .and_then(|ip| if let IpAddr::V6(ip) = ip { Some(ip) } else { None });
+        MarkRuntimeProvider { mark_value, bind_addr4, bind_addr6, bind_config }
     }
 
     /// The local address a socket for `server_addr` should bind to: the
@@ -78,6 +85,7 @@ impl MarkRuntimeProvider {
         socket.bind(bind_addr)?;
 
         socket.set_nodelay(true)?;
+        bind_wan_device(socket.as_raw_fd(), server_addr, &self.bind_config)?;
         set_socket_mark(socket.as_raw_fd(), self.mark_value)?;
 
         let future = socket.connect(server_addr);
@@ -111,6 +119,7 @@ impl MarkRuntimeProvider {
         }
 
         let socket = TokioUdpSocket::bind(bind_addr).await?;
+        bind_wan_device(socket.as_raw_fd(), server_addr, &self.bind_config)?;
         set_socket_mark(socket.as_raw_fd(), self.mark_value)?;
         socket.connect(server_addr).await?;
         Ok(socket)
@@ -131,6 +140,7 @@ impl MarkRuntimeProvider {
     fn bind_quic_socket(&self, server_addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
         let bind_addr = self.bind_addr(server_addr);
         let socket = std::net::UdpSocket::bind(bind_addr)?;
+        bind_wan_device(socket.as_raw_fd(), server_addr, &self.bind_config)?;
         set_socket_mark(socket.as_raw_fd(), self.mark_value)?;
         Ok(socket)
     }

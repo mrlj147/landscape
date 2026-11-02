@@ -62,6 +62,12 @@ export default {
     err_match_rules_required: "至少需要添加一条匹配域名规则",
   },
   upstream_edit: {
+    follow_flow: "DNS 上游跟随出口",
+    follow_flow_off: "保持原有路由 / 固定源地址",
+    default_flow: "默认 Flow (0)",
+    follow_flow_hint:
+      "绑定所选 Flow 当前 WAN 的源地址和网卡，切换时重建上游连接。无可用 WAN 的地址族不会改走其他出口。",
+
     title: "DNS 上游配置",
     copy: "复制",
     paste: "粘贴",

@@ -556,6 +556,22 @@ mod wan_link_ref_tests {
     }
 
     #[tokio::test]
+    async fn health_check_cannot_be_disabled_while_failover_references_it() {
+        use landscape_common::database::validator::StoreValidator;
+        let (provider, link_id) = setup().await;
+        let mut flow = flow_config(link_id, "ppp0");
+        flow.failover.enable = true;
+        provider.flow_rule_store().upsert(flow.clone()).await.unwrap();
+        let mut wan = provider.wan_link_store().find_by_id(link_id).await.unwrap().unwrap();
+        wan.health_check.enable = false;
+        let error = provider.wan_link_store().validate_cross(&mut wan).await.unwrap_err();
+        assert!(error.to_string().contains("health"));
+        flow.failover.enable = false;
+        provider.flow_rule_store().upsert(flow).await.unwrap();
+        assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn interface_target_mirror_is_rewritten_from_the_link() {
         let (provider, link_id) = setup().await;
 

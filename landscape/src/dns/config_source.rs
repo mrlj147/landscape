@@ -16,6 +16,7 @@ pub struct DbDnsConfigSource {
     rules: DNSRuleService,
     redirects: DNSRedirectService,
     upstreams: DnsUpstreamService,
+    routes: crate::sys_service::route::IpRouteService,
 }
 
 impl DbDnsConfigSource {
@@ -23,8 +24,9 @@ impl DbDnsConfigSource {
         rules: DNSRuleService,
         redirects: DNSRedirectService,
         upstreams: DnsUpstreamService,
+        routes: crate::sys_service::route::IpRouteService,
     ) -> Self {
-        Self { rules, redirects, upstreams }
+        Self { rules, redirects, upstreams, routes }
     }
 }
 
@@ -54,11 +56,16 @@ impl DnsConfigSource for DbDnsConfigSource {
         rules: Vec<DNSRuleConfig>,
     ) -> Result<FlowConfigBundle, DnsConfigError> {
         let upstream_ids = rules.iter().map(|rule| rule.upstream_id).collect();
-        let upstreams = self
+        let mut upstreams = self
             .upstreams
             .find_ids(upstream_ids)
             .await
             .map_err(|error| config_error("failed to load DNS upstreams", error))?;
+        for upstream in &mut upstreams {
+            if let Some(flow) = upstream.bind_config.follow_flow {
+                upstream.bind_config.resolved_wan = Some(self.routes.dns_wan_binding(flow).await);
+            }
+        }
         let redirects = self
             .redirects
             .list_flow_configs(flow_id)

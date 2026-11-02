@@ -16,6 +16,7 @@ pub(super) async fn probe(
     src: Ipv4Addr,
     method: &RuntimeWanHealthProbe,
     timeout: Duration,
+    mark: u32,
 ) -> Result<Option<Duration>, ProbeError> {
     let target = match method {
         RuntimeWanHealthProbe::Dns { server, domain } => {
@@ -26,7 +27,7 @@ pub(super) async fn probe(
         }
         _ => return Err(ProbeError::Config("expected an application probe".into())),
     };
-    probe_target(dev, src.into(), &target, timeout).await
+    probe_target(dev, src.into(), &target, timeout, mark).await
 }
 
 pub(super) async fn probe_target(
@@ -34,12 +35,13 @@ pub(super) async fn probe_target(
     src: IpAddr,
     method: &WanProbeTarget,
     timeout: Duration,
+    mark: u32,
 ) -> Result<Option<Duration>, ProbeError> {
     let start = Instant::now();
     let round = async {
         match method {
             WanProbeTarget::Dns { server, domain } => {
-                Ok(!resolve(dev, src, *server, domain).await?.is_empty())
+                Ok(!resolve(dev, src, *server, domain, mark).await?.is_empty())
             }
             WanProbeTarget::Http { url, dns_server } => {
                 let url =
@@ -48,30 +50,29 @@ pub(super) async fn probe_target(
                     url.host_str().ok_or_else(|| ProbeError::Config("missing HTTP host".into()))?;
                 let addresses = match host.trim_matches(['[', ']']).parse::<IpAddr>() {
                     Ok(ip) => vec![ip],
-                    Err(_) => resolve(dev, src, *dns_server, host).await?,
+                    Err(_) => resolve(dev, src, *dns_server, host, mark).await?,
                 };
                 if addresses.is_empty() {
                     return Ok(false);
                 }
-                let addresses: Vec<SocketAddr> =
-                    addresses.into_iter().map(|ip| SocketAddr::from((ip, 0))).collect();
-                let client = reqwest::Client::builder()
-                    .no_proxy()
-                    .interface(dev)
-                    .local_address(src)
-                    .resolve_to_addrs(host, &addresses)
-                    // Following redirects could introduce a new hostname resolved
-                    // by the system. A 3xx itself is an answered HTTP request.
-                    .redirect(reqwest::redirect::Policy::none())
-                    .timeout(timeout)
-                    .build()
-                    .map_err(|e| ProbeError::Config(e.to_string()))?;
-                Ok(client.get(url).send().await.is_ok_and(|response| {
-                    response.status().is_success() || response.status().is_redirection()
-                }))
+                let port = url
+                    .port_or_known_default()
+                    .ok_or_else(|| ProbeError::Config("unsupported HTTP scheme".into()))?;
+                for address in addresses {
+                    if address.is_ipv6() != src.is_ipv6() {
+                        continue;
+                    }
+                    if http_request(dev, src, SocketAddr::new(address, port), &url, mark)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
             }
             WanProbeTarget::Icmp { address } => {
-                Ok(super::probe::ping_ip(dev, src, *address, timeout).await?.is_some())
+                Ok(super::probe::ping_ip(dev, src, *address, timeout, mark).await?.is_some())
             }
         }
     };
@@ -87,8 +88,9 @@ async fn resolve(
     src: IpAddr,
     server: IpAddr,
     domain: &str,
+    mark: u32,
 ) -> Result<Vec<IpAddr>, ProbeError> {
-    resolve_at(dev, src, SocketAddr::from((server, 53)), domain).await
+    resolve_at(dev, src, SocketAddr::from((server, 53)), domain, mark).await
 }
 
 async fn resolve_at(
@@ -96,6 +98,7 @@ async fn resolve_at(
     src: IpAddr,
     server: SocketAddr,
     domain: &str,
+    mark: u32,
 ) -> Result<Vec<IpAddr>, ProbeError> {
     let socket = Socket::new(
         if src.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 },
@@ -103,6 +106,9 @@ async fn resolve_at(
         Some(Protocol::UDP),
     )?;
     socket.bind_device(Some(dev.as_bytes()))?;
+    if mark != 0 {
+        socket.set_mark(mark)?;
+    }
     socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
     socket.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(socket.into())?;
@@ -143,6 +149,76 @@ async fn resolve_at(
             })
             .collect());
     }
+}
+
+async fn http_request(
+    dev: &str,
+    src: IpAddr,
+    peer: SocketAddr,
+    url: &reqwest::Url,
+    mark: u32,
+) -> Result<bool, ProbeError> {
+    let socket = if src.is_ipv6() {
+        tokio::net::TcpSocket::new_v6()?
+    } else {
+        tokio::net::TcpSocket::new_v4()?
+    };
+    let sockref = socket2::SockRef::from(&socket);
+    sockref.bind_device(Some(dev.as_bytes()))?;
+    if mark != 0 {
+        sockref.set_mark(mark)?;
+    }
+    socket.bind(SocketAddr::new(src, 0))?;
+    let stream = match socket.connect(peer).await {
+        Ok(stream) => stream,
+        Err(_) => return Ok(false),
+    };
+    if url.scheme() == "https" {
+        let roots =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| ProbeError::Config(e.to_string()))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let host = url.host_str().unwrap_or_default().trim_matches(['[', ']']).to_owned();
+        let name = rustls_pki_types::ServerName::try_from(host)
+            .map_err(|e| ProbeError::Config(e.to_string()))?;
+        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls));
+        match connector.connect(name, stream).await {
+            Ok(stream) => http_status(stream, url).await,
+            Err(_) => Ok(false),
+        }
+    } else {
+        http_status(stream, url).await
+    }
+}
+
+async fn http_status<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    mut stream: S,
+    url: &reqwest::Url,
+) -> Result<bool, ProbeError> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let authority = &url[url::Position::BeforeHost..url::Position::AfterPort];
+    let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nUser-Agent: Landscape-WAN-Probe\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).await.is_err() {
+        return Ok(false);
+    }
+    let mut reader = tokio::io::BufReader::new(stream).take(4096);
+    let mut line = String::new();
+    if reader.read_line(&mut line).await.is_err() || !line.ends_with("\r\n") {
+        return Ok(false);
+    }
+    let mut words = line.split_whitespace();
+    let version = words.next();
+    let code = words.next().and_then(|s| s.parse::<u16>().ok());
+    Ok(matches!(version, Some("HTTP/1.0" | "HTTP/1.1"))
+        && code.is_some_and(|code| (200..400).contains(&code)))
 }
 
 fn matches_query(request: &Message, reply: &Message) -> bool {
@@ -192,7 +268,7 @@ mod tests {
         });
         let addresses = tokio::time::timeout(
             Duration::from_secs(2),
-            resolve_at("lo", Ipv4Addr::LOCALHOST.into(), addr, "test.example"),
+            resolve_at("lo", Ipv4Addr::LOCALHOST.into(), addr, "test.example", 0),
         )
         .await
         .unwrap()
@@ -222,7 +298,7 @@ mod tests {
                 dns_server: Ipv4Addr::new(192, 0, 2, 1),
             };
             let result =
-                probe("lo", Ipv4Addr::LOCALHOST, &method, Duration::from_secs(2)).await.unwrap();
+                probe("lo", Ipv4Addr::LOCALHOST, &method, Duration::from_secs(2), 0).await.unwrap();
             assert_eq!(result.is_some(), healthy);
             task.await.unwrap();
         }

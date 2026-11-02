@@ -64,6 +64,12 @@ export default {
     err_match_rules_required: "At least one domain match rule is required",
   },
   upstream_edit: {
+    follow_flow: "Follow WAN selection",
+    follow_flow_off: "Existing routing / fixed source address",
+    default_flow: "Default Flow (0)",
+    follow_flow_hint:
+      "Bind upstream sockets to the selected flow's WAN address and device, rebuilding connections on changes. Unavailable address families fail without falling back to another exit.",
+
     title: "DNS Upstream Config",
     copy: "Copy",
     paste: "Paste",

@@ -207,7 +207,9 @@ impl FailoverSelections {
             }
             if previous != selected {
                 let recovery = !reordered && previous.is_some_and(|id| healthy(&id));
-                let policy = if recovery {
+                let policy = if !config.failover.enable || reordered {
+                    landscape_common::flow::FlowConnectionPolicy::ResetExisting
+                } else if recovery {
                     config.failover.recovery_connection_policy
                 } else {
                     config.failover.failure_connection_policy
@@ -345,6 +347,49 @@ fn apply_ipv6_target_refresh_result(
 }
 
 impl IpRouteService {
+    /// Resolve a DNS upstream's opt-in flow binding without consulting the
+    /// kernel default route. Each family may independently have no usable WAN.
+    pub async fn dns_wan_binding(
+        &self,
+        flow_id: u32,
+    ) -> landscape_common::dns::bind::DnsWanBinding {
+        let selections = self.failover_selections.lock().await;
+        let get = |ipv6| {
+            selections
+                .published
+                .get(&(flow_id, ipv6))
+                .filter(|targets| targets.len() == 1)
+                .and_then(|targets| targets.first())
+                .map(|(route, _)| route.info.clone())
+        };
+        let mut v4 = get(false);
+        let mut v6 = get(true);
+        if flow_id == 0 && !selections.published.contains_key(&(0, false)) {
+            v4 = self
+                .clone_ipv4_wan_infos()
+                .await
+                .values()
+                .find(|r| r.info.default_route)
+                .map(|r| r.info.clone());
+            v6 = self
+                .clone_ipv6_wan_infos()
+                .await
+                .values()
+                .find(|r| r.info.default_route)
+                .map(|r| r.info.clone());
+        }
+        landscape_common::dns::bind::DnsWanBinding {
+            ipv4: v4.and_then(|r| match r.iface_ip {
+                std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Some((r.iface_name, ip)),
+                _ => None,
+            }),
+            ipv6: v6.and_then(|r| match r.iface_ip {
+                std::net::IpAddr::V6(ip) if !ip.is_unspecified() => Some((r.iface_name, ip)),
+                _ => None,
+            }),
+        }
+    }
+
     pub async fn get_flow_wan_statuses(
         &self,
     ) -> Vec<landscape_common::flow::failover::FlowWanStatus> {
@@ -373,10 +418,10 @@ impl IpRouteService {
         // ifindex/gateway data, even though the link UUID did not change.
         for (ipv6, updates) in [(false, &ipv4_updates), (true, &ipv6_updates)] {
             for id in updates.keys() {
-                if let Some(state) = selections.active.get_mut(&(*id, ipv6)) {
-                    if !state.selection_changed {
-                        state.generation = state.generation.wrapping_add(1);
-                    }
+                if let Some(state) = selections.active.get_mut(&(*id, ipv6))
+                    && !state.selection_changed
+                {
+                    state.generation = state.generation.wrapping_add(1);
                 }
             }
         }

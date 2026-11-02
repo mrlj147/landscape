@@ -26,7 +26,8 @@ static __always_inline int xdp_read_ipv4(struct xdp_md *ctx, struct route4_conte
         (iph->protocol == 6 || iph->protocol == 17)) {
         __be16 *ports = (void *)iph + (u32)iph->ihl * 4;
         if ((void *)(ports + 2) <= data_end) {
-            context->src_port = ports[0]; context->dst_port = ports[1];
+            context->src_port = ports[0];
+            context->dst_port = ports[1];
             context->l4_protocol = iph->protocol;
         }
     }
@@ -52,7 +53,8 @@ static __always_inline int xdp_read_ipv6(struct xdp_md *ctx, struct route6_conte
         off.frag_code == LAND_FRAG_NONE && (off.l4_protocol == 6 || off.l4_protocol == 17)) {
         __be16 *ports = data + off.l4_offset;
         if ((void *)(ports + 2) <= data_end) {
-            context->src_port = ports[0]; context->dst_port = ports[1];
+            context->src_port = ports[0];
+            context->dst_port = ports[1];
             context->l4_protocol = off.l4_protocol;
         }
     }

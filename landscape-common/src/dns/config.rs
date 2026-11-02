@@ -75,4 +75,20 @@ impl Default for DnsUpstreamConfig {
     }
 }
 
-crate::impl_trivial_validatable!(DnsUpstreamConfig);
+impl crate::database::validator::ValidatableConfig for DnsUpstreamConfig {
+    fn validate(&self) -> Result<(), crate::service::ServiceConfigError> {
+        if self.bind_config.follow_flow.is_some_and(|id| id > 255) {
+            return Err(crate::service::ServiceConfigError::InvalidConfig {
+                reason: "DNS follow_flow must be between 0 and 255".into(),
+            });
+        }
+        if self.bind_config.follow_flow.is_some()
+            && (self.bind_config.bind_addr4.is_some() || self.bind_config.bind_addr6.is_some())
+        {
+            return Err(crate::service::ServiceConfigError::InvalidConfig {
+                reason: "DNS WAN following cannot be combined with a fixed source address".into(),
+            });
+        }
+        Ok(())
+    }
+}

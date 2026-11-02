@@ -24,6 +24,17 @@ pub enum ProbeError {
 /// tests can drive it with a fake.
 #[async_trait::async_trait]
 pub trait WanHealthProbe: Send + Sync {
+    async fn ping_v4_marked(
+        &self,
+        dev: &str,
+        src: Ipv4Addr,
+        target: Ipv4Addr,
+        timeout: Duration,
+        _mark: u32,
+    ) -> Result<Option<Duration>, ProbeError> {
+        self.ping_v4(dev, src, target, timeout).await
+    }
+
     async fn ping_v4(
         &self,
         dev: &str,
@@ -41,16 +52,20 @@ pub(super) async fn ping_ip(
     src: IpAddr,
     target: IpAddr,
     timeout: Duration,
+    mark: u32,
 ) -> Result<Option<Duration>, ProbeError> {
     match (src, target) {
         (IpAddr::V4(src), IpAddr::V4(target)) => {
-            IcmpV4Probe.ping_v4(dev, src, target, timeout).await
+            IcmpV4Probe.ping_v4_marked(dev, src, target, timeout, mark).await
         }
         (IpAddr::V6(src), IpAddr::V6(target)) => {
             let dev = dev.to_owned();
             tokio::task::spawn_blocking(move || {
                 let socket = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
                 socket.bind_device(Some(dev.as_bytes()))?;
+                if mark != 0 {
+                    socket.set_mark(mark)?;
+                }
                 socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
                 let id: u16 = rand::random();
                 let seq: u16 = rand::random();
@@ -98,6 +113,20 @@ pub(super) async fn ping_ip(
 
 #[async_trait::async_trait]
 impl WanHealthProbe for IcmpV4Probe {
+    async fn ping_v4_marked(
+        &self,
+        dev: &str,
+        src: Ipv4Addr,
+        target: Ipv4Addr,
+        timeout: Duration,
+        mark: u32,
+    ) -> Result<Option<Duration>, ProbeError> {
+        let dev = dev.to_owned();
+        tokio::task::spawn_blocking(move || icmp_ping_blocking(&dev, src, target, timeout, mark))
+            .await
+            .map_err(ProbeError::Task)?
+    }
+
     async fn ping_v4(
         &self,
         dev: &str,
@@ -106,7 +135,7 @@ impl WanHealthProbe for IcmpV4Probe {
         timeout: Duration,
     ) -> Result<Option<Duration>, ProbeError> {
         let dev = dev.to_string();
-        tokio::task::spawn_blocking(move || icmp_ping_blocking(&dev, src, target, timeout))
+        tokio::task::spawn_blocking(move || icmp_ping_blocking(&dev, src, target, timeout, 0))
             .await
             .map_err(ProbeError::Task)?
     }
@@ -117,9 +146,13 @@ fn icmp_ping_blocking(
     src: Ipv4Addr,
     target: Ipv4Addr,
     timeout: Duration,
+    mark: u32,
 ) -> Result<Option<Duration>, ProbeError> {
     let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4))?;
     socket.bind_device(Some(dev.as_bytes()))?;
+    if mark != 0 {
+        socket.set_mark(mark)?;
+    }
     socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
 
     let ident: u16 = rand::random();

@@ -31,7 +31,13 @@ jobs:
       - run: |
           cargo test --locked -p landscape --lib wan_link_service::
       - run: cargo test --locked -p landscape-webserver export_openapi_json
-      - run: cargo test --locked -p landscape-ebpf --features test-route --lib --no-run
+      - name: Compile isolated network tests
+        run: cargo test --locked -p landscape-ebpf --features test-route,test-chain --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
+      - name: Real WAN failover packets in netns/veth
+        run: |
+          wan_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_ebpf" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-ebpf-build.json" | tail -1)
+          test -n "$wan_test_bin"
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" wan_failover_netns_real_traffic --ignored --test-threads=1 --nocapture
       - uses: actions/setup-node@v6
         with:
           node-version: '24'

@@ -121,8 +121,8 @@ pub(super) async fn run(
                 }
                 let round = async {
                     match &config.probe {
-                        RuntimeWanHealthProbe::Icmp { .. } => probe_round(&probe, &iface.iface_name, src, &round_targets, config.timeout_ms).await,
-                        method => match super::application_probe::probe(&iface.iface_name, src, method, Duration::from_millis(config.timeout_ms.into())).await {
+                        RuntimeWanHealthProbe::Icmp { .. } => probe_round(&probe, &iface.iface_name, src, &round_targets, config.timeout_ms, config.socket_mark).await,
+                        method => match super::application_probe::probe(&iface.iface_name, src, method, Duration::from_millis(config.timeout_ms.into()), config.socket_mark).await {
                             Ok(rtt) => RoundOutcome::Evidence(vec![TargetProbe { target: round_targets[0].into(), rtt }]),
                             Err(error) => {
                                 tracing::warn!(%link_id, %error, "application health probe failed locally");
@@ -247,13 +247,14 @@ async fn probe_round(
     src: Ipv4Addr,
     targets: &[Ipv4Addr],
     timeout_ms: u16,
+    mark: u32,
 ) -> RoundOutcome {
     let timeout = Duration::from_millis(timeout_ms.into());
     let rounds = join_all(targets.iter().map(|&target| {
         let probe = probe.clone();
         let dev = dev.to_string();
         async move {
-            match probe.ping_v4(&dev, src, target, timeout).await {
+            match probe.ping_v4_marked(&dev, src, target, timeout, mark).await {
                 Ok(rtt) => Some(TargetProbe { target: target.into(), rtt }),
                 Err(err) => {
                     tracing::warn!(iface = %dev, target = %target, error = %err, "health-check probe error");

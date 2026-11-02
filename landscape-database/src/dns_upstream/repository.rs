@@ -26,4 +26,36 @@ crate::impl_repository!(
     DBId
 );
 
-crate::impl_trivial_validator!(DnsUpstreamRepository, DnsUpstreamConfig);
+#[async_trait::async_trait]
+impl landscape_common::database::validator::StoreValidator<DnsUpstreamConfig>
+    for DnsUpstreamRepository
+{
+    async fn check_zone(
+        &self,
+        _: &DnsUpstreamConfig,
+    ) -> Result<(), landscape_common::service::ServiceConfigError> {
+        Ok(())
+    }
+    async fn validate_cross(
+        &self,
+        config: &mut DnsUpstreamConfig,
+    ) -> Result<(), landscape_common::service::ServiceConfigError> {
+        use landscape_common::{database::store::ConfigStore, service::ServiceConfigError};
+        if let Some(id) = config.bind_config.follow_flow.filter(|id| *id != 0) {
+            let flows = crate::flow_rule::repository::FlowConfigRepository::new(self.db.clone())
+                .list()
+                .await
+                .map_err(ServiceConfigError::internal)?;
+            if !flows
+                .iter()
+                .any(|flow| flow.flow_id == id && flow.enable && flow.failover.ordered_targets())
+            {
+                return Err(ServiceConfigError::InvalidConfig {
+                    reason: "DNS WAN binding requires an enabled primary/backup flow".into(),
+                });
+            }
+        }
+        config.bind_config.resolved_wan = None;
+        Ok(())
+    }
+}

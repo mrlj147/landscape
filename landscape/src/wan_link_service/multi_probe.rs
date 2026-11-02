@@ -81,11 +81,19 @@ async fn round(
         let results = join_all(group.targets.iter().map(|target| async move {
             let result = match (target, src) {
                 (WanProbeTarget::Icmp { address: IpAddr::V4(ip) }, IpAddr::V4(src)) => {
-                    probe.ping_v4(&iface.iface_name, src, *ip, timeout).await
+                    probe
+                        .ping_v4_marked(&iface.iface_name, src, *ip, timeout, cfg.socket_mark)
+                        .await
                 }
                 _ => {
-                    super::application_probe::probe_target(&iface.iface_name, src, target, timeout)
-                        .await
+                    super::application_probe::probe_target(
+                        &iface.iface_name,
+                        src,
+                        target,
+                        timeout,
+                        cfg.socket_mark,
+                    )
+                    .await
                 }
             };
             (target.address(), result)

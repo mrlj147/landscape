@@ -118,7 +118,10 @@ impl RuntimeWanLinkConfig {
                 enable: config.mss.enable,
                 clamp_size: config.mss.clamp_size.unwrap_or(DEFAULT_CLAMP_SIZE),
             },
-            health_check: RuntimeWanLinkHealthCheckConfig::from_config(&config.health_check),
+            health_check: RuntimeWanLinkHealthCheckConfig::from_config(
+                &config.health_check,
+                config.link_chain_id,
+            ),
         }
     }
 
@@ -193,6 +196,7 @@ pub struct RuntimeWanLinkMssConfig {
 /// resolved (IPv6 filtered out).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeWanLinkHealthCheckConfig {
+    pub socket_mark: u32,
     pub enable: bool,
     pub probe: RuntimeWanHealthProbe,
     pub interval_secs: u16,
@@ -227,7 +231,7 @@ pub enum RuntimeWanHealthProbe {
 }
 
 impl RuntimeWanLinkHealthCheckConfig {
-    fn from_config(config: &WanLinkHealthCheckConfig) -> Self {
+    fn from_config(config: &WanLinkHealthCheckConfig, chain_id: u16) -> Self {
         let probe = match &config.probe {
             WanHealthProbeConfig::Multi { groups } => {
                 RuntimeWanHealthProbe::Multi { groups: groups.clone() }
@@ -250,6 +254,10 @@ impl RuntimeWanLinkHealthCheckConfig {
             }
         };
         Self {
+            socket_mark: u32::from(crate::flow::mark::SocketMark::new(
+                crate::flow::mark::MarkType::HostDirect { chain_id },
+                0,
+            )),
             enable: config.enable,
             probe,
             interval_secs: config.interval_secs.unwrap_or(DEFAULT_HEALTH_INTERVAL_SECS),
