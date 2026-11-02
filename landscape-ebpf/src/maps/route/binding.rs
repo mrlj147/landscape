@@ -10,6 +10,55 @@ const USE_BOUND_WAN: u64 = 10425;
 const TABLE_BASE: u64 = 43000;
 const MAX_CHAIN: u64 = 1023;
 
+fn managed_target(target: &WanRouteTarget) -> bool {
+    target.link_chain_id > 0
+        && u64::from(target.link_chain_id) <= MAX_CHAIN
+        && !target.info.is_docker
+}
+
+/// Even loose RPF drops replies when the only main default disappears: its
+/// reverse lookup cannot match our socket-only oif rules. DHCP already disables
+/// RPF; apply the same receive policy to static and PPP WANs, including recreated
+/// PPP interfaces. Leave LAN interfaces and the administrator's global override
+/// untouched, and report an incompatible override explicitly.
+fn sync_wan_receive_policy(targets: &[WanRouteTarget]) -> Result<(), String> {
+    let mut interfaces = std::collections::BTreeSet::new();
+    for target in targets.iter().filter(|t| managed_target(t) && t.info.iface_ip.is_ipv4()) {
+        interfaces.insert(target.info.iface_name.as_str());
+    }
+    if interfaces.is_empty() {
+        return Ok(());
+    }
+    let root = std::path::Path::new("/proc/sys/net/ipv4/conf");
+    for iface in interfaces {
+        // Interface names may contain dots; use procfs rather than dotted
+        // sysctl keys. Never interpret a supplied name as a path/global key.
+        if iface.is_empty()
+            || matches!(iface, "all" | "default" | "." | "..")
+            || iface.contains('/')
+        {
+            return Err(format!("invalid managed WAN interface {iface:?}"));
+        }
+        let path = root.join(iface).join("rp_filter");
+        let current = std::fs::read_to_string(&path)
+            .map_err(|e| format!("read WAN {iface} rp_filter: {e}"))?;
+        if current.trim() != "0" {
+            std::fs::write(&path, "0\n")
+                .map_err(|e| format!("disable WAN {iface} rp_filter: {e}"))?;
+            tracing::info!(iface, previous = current.trim(), "disabled RPF on managed WAN");
+        }
+    }
+    let global = std::fs::read_to_string(root.join("all/rp_filter"))
+        .map_err(|e| format!("read global rp_filter: {e}"))?;
+    if global.trim() != "0" {
+        return Err(format!(
+            "WAN replies may be dropped without a main default: net.ipv4.conf.all.rp_filter={} overrides per-WAN settings; set the global override to 0 while retaining per-interface LAN policies",
+            global.trim()
+        ));
+    }
+    Ok(())
+}
+
 fn rule_args(family: &str, action: &str, iface: &str, table: u64, keep: bool) -> Vec<String> {
     let mut args = strings(&[family, "rule", action, "pref"]);
     args.push(if keep { KEEP_SPECIFIC } else { USE_BOUND_WAN }.to_string());
@@ -29,12 +78,7 @@ fn matches(rule: &Value, iface: &str, table: u64, keep: bool) -> bool {
 async fn family(family: &str, targets: &[WanRouteTarget]) -> Result<(), String> {
     let wanted: Vec<_> = targets
         .iter()
-        .filter(|t| {
-            t.link_chain_id > 0
-                && u64::from(t.link_chain_id) <= MAX_CHAIN
-                && !t.info.is_docker
-                && t.info.iface_ip.is_ipv6() == (family == "-6")
-        })
+        .filter(|t| managed_target(t) && t.info.iface_ip.is_ipv6() == (family == "-6"))
         .collect();
     let list = command(&strings(&["-j", family, "rule", "show"])).await?;
     if !list.status.success() {
@@ -125,5 +169,6 @@ async fn family(family: &str, targets: &[WanRouteTarget]) -> Result<(), String> 
 }
 pub async fn sync_bound_wan_routes(targets: &[WanRouteTarget]) -> Result<(), String> {
     family("-4", targets).await?;
-    family("-6", targets).await
+    family("-6", targets).await?;
+    sync_wan_receive_policy(targets)
 }

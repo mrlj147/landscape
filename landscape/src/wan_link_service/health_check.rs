@@ -37,6 +37,25 @@ enum RoundOutcome {
     Blind { errored: usize },
 }
 
+/// Only an explicitly disabled family inherits evidence. Missing/erroring
+/// probes in an enabled family must remain Unknown, never silently fail open.
+pub(super) async fn sync_followed_family(
+    routes: &IpRouteService,
+    link_id: Uuid,
+    cfg: &RuntimeWanLinkHealthCheckConfig,
+) {
+    let (source_v6, follower_v6) = match (cfg.ipv4_probe_enabled, cfg.ipv6_probe_enabled) {
+        (true, false) => (false, true),
+        (false, true) => (true, false),
+        _ => return,
+    };
+    if let Some(info) = routes.get_link_health_for_family(link_id, source_v6).await {
+        routes.update_link_health_for_family(info, follower_v6).await;
+    } else {
+        routes.clear_link_health_for_family(link_id, follower_v6).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run(
     link_id: Uuid,
@@ -62,6 +81,12 @@ pub(super) async fn run(
             groups,
         )
         .await;
+    }
+    if !config.ipv4_probe_enabled {
+        route_service.clear_link_health(link_id).await;
+        service_status.just_change_status(ServiceStatus::Failed);
+        swap_if_changed(&runtime, HealthCheckRuntime::Stopped);
+        return;
     }
     let stop = service_status.stop_token();
 
@@ -89,6 +114,7 @@ pub(super) async fn run(
 
     // Silent init push (Unknown -> Unknown never broadcasts).
     route_service.update_link_health(evaluator.info().clone()).await;
+    sync_followed_family(&route_service, link_id, &config).await;
 
     service_status.just_change_status(ServiceStatus::Running);
     swap_if_changed(
@@ -156,6 +182,7 @@ pub(super) async fn run(
                             }
                         }
                         route_service.update_link_health(evaluator.info().clone()).await;
+                        sync_followed_family(&route_service, link_id, &config).await;
                         publish_round(
                             &runtime,
                             evaluator.info(),

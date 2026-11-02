@@ -35,9 +35,8 @@ use landscape_common::service::{
 };
 use landscape_common::wan_link::{
     LinkState, LinkStateHandle, RuntimeWanLinkConfig, SectionKind, SessionIface, SessionPhase,
-    SessionState, V4Runtime, WanHealthProbeConfig, WanLinkConfig, WanLinkRuntimeStatusStore,
-    WanLinkSectionsSnapshot, WanLinkSectionsStatus, WanLinkStatus, WanLinkStatusHandle,
-    WanLinkStatusStore,
+    SessionState, V4Runtime, WanLinkConfig, WanLinkRuntimeStatusStore, WanLinkSectionsSnapshot,
+    WanLinkSectionsStatus, WanLinkStatus, WanLinkStatusHandle, WanLinkStatusStore,
 };
 use landscape_common::wan_service::ipv6_pd::config::DEFAULT_EXPECTED_PD_LEN;
 use landscape_common::wan_service::ipv6_pd::{IPV6PDPrefixStatus, LDIAPrefix};
@@ -521,14 +520,9 @@ impl ServiceStarterTrait for WanLinkService {
 
 /// Health check needs something to probe: explicit targets or the gateway.
 fn health_check_enabled(cfg: &WanLinkConfig) -> bool {
-    cfg.health_check.enable
-        && match &cfg.health_check.probe {
-            WanHealthProbeConfig::Multi { groups } => !groups.is_empty(),
-            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
-                !targets.is_empty() || *probe_gateway
-            }
-            WanHealthProbeConfig::Dns { .. } | WanHealthProbeConfig::Http { .. } => true,
-        }
+    let health = &cfg.health_check;
+    let (v4, v6) = health.probe_families();
+    health.enable && (health.ipv4_probe_enabled && v4 || health.ipv6_probe_enabled && v6)
 }
 
 impl WanLinkService {

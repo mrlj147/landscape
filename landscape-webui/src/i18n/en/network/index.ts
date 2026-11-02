@@ -45,6 +45,13 @@ export default {
     clamp_value: "Clamp Value",
   },
   health_check: {
+    ipv4_probe: "Enable IPv4 probes",
+    ipv6_probe: "Enable IPv6 probes",
+    family_hint:
+      "Enabled families are evaluated independently. A disabled family inherits the other verdict but still needs its own route. Keep at least one usable probe family. Legacy Ping / DNS / HTTP probes are IPv4-only; use grouped probes for IPv6.",
+    follow_family:
+      "{follower} sends no probes and inherits {source} health. Failures affecting only {follower} cannot be detected.",
+
     dns_ip: "Upstream DNS IPv4 / IPv6 address",
     multi: "Multiple targets / IPv4 + IPv6",
     multi_hint:

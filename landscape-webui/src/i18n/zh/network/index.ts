@@ -44,6 +44,13 @@ export default {
     clamp_value: "钳制值",
   },
   health_check: {
+    ipv4_probe: "启用 IPv4 探测",
+    ipv6_probe: "启用 IPv6 探测",
+    family_hint:
+      "两项都开启时独立判断；关闭一项后沿用另一项的健康结果，但仍检查本地址族路由。至少保留一项有效探测。普通 Ping / DNS / HTTP 仅支持 IPv4，IPv6 目标请使用“多目标分组”。",
+    follow_family:
+      "{follower} 不发送探测，沿用 {source} 的健康结果。无法发现仅影响 {follower} 的外网故障。",
+
     dns_ip: "上游 DNS IPv4 / IPv6 地址",
     multi: "多目标 / IPv4 + IPv6",
     multi_hint:

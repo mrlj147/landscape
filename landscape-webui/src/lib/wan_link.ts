@@ -27,6 +27,8 @@ export const MAX_HEALTH_TARGETS = 4;
 
 export type HealthCheckConfig = {
   enable: boolean;
+  ipv4_probe_enabled: boolean;
+  ipv6_probe_enabled: boolean;
   probe:
     | { t: "icmp"; targets: string[]; probe_gateway: boolean }
     | { t: "dns"; server: string; domain: string }
@@ -42,6 +44,8 @@ export type HealthCheckConfig = {
 export function default_health_check(): HealthCheckConfig {
   return {
     enable: false,
+    ipv4_probe_enabled: true,
+    ipv6_probe_enabled: true,
     probe: { t: "icmp", targets: [], probe_gateway: false },
     interval_secs: DEFAULT_HEALTH_INTERVAL_SECS,
     timeout_ms: DEFAULT_HEALTH_TIMEOUT_MS,
@@ -215,6 +219,8 @@ function health_check_from_raw(raw_section: unknown): HealthCheckConfig {
   const section = raw_section as
     | {
         enable?: boolean;
+        ipv4_probe_enabled?: boolean;
+        ipv6_probe_enabled?: boolean;
         probe?: {
           t?: string;
           groups?: WanProbeGroup[];
@@ -238,6 +244,8 @@ function health_check_from_raw(raw_section: unknown): HealthCheckConfig {
   }
   return {
     enable: section.enable ?? false,
+    ipv4_probe_enabled: section.ipv4_probe_enabled ?? true,
+    ipv6_probe_enabled: section.ipv6_probe_enabled ?? true,
     probe:
       section.probe?.t === "multi"
         ? { t: "multi", groups: structuredClone(section.probe.groups ?? []) }

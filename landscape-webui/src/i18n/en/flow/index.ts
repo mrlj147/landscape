@@ -57,7 +57,7 @@ export default {
     restore_weighted: "Restore weighted routing mode",
     enable: "Enable WAN failover",
     auto_failback: "Return to primary WAN after recovery",
-    hint: "Order exits from primary to backups. Enable health checks on every WAN first; IPv6-enabled WANs require IPv6 probes. Unknown exits follow the grace/fail-open settings. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
+    hint: "Order exits from primary to backups. Enable health checks on every WAN first; enabled probe families require targets; a disabled family inherits the other health verdict. Unknown exits follow the grace/fail-open settings. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
     invalid_targets:
       "Failover requires at least two distinct WAN links and does not support container exits.",
     primary: "Primary WAN",

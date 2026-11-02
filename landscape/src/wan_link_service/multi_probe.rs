@@ -66,6 +66,9 @@ async fn round(
     probe: &Arc<dyn WanHealthProbe>,
     routes: &IpRouteService,
 ) {
+    if !(if ipv6 { cfg.ipv6_probe_enabled } else { cfg.ipv4_probe_enabled }) {
+        return;
+    }
     let groups: Vec<_> = groups
         .iter()
         .filter(|g| g.targets.first().is_some_and(|p| p.address().is_ipv6() == ipv6))
@@ -179,7 +182,12 @@ pub(super) async fn run(
             );
         };
         tokio::select! { _ = stop.cancelled() => break, _ = rounds => {}, _ = state_changes.changed() => { ticker.reset_immediately(); continue; } }
-        let summary = if source4.is_some() { v4.evaluator.info() } else { v6.evaluator.info() };
+        super::health_check::sync_followed_family(&routes, link_id, &cfg).await;
+        let summary = if cfg.ipv4_probe_enabled && source4.is_some() {
+            v4.evaluator.info()
+        } else {
+            v6.evaluator.info()
+        };
         swap_if_changed(
             &runtime,
             HealthCheckRuntime::Running {
@@ -201,6 +209,43 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn disabled_families_do_not_attempt_any_targets() {
+        use super::super::probe::FakeProbe;
+        use landscape_common::wan_link::{RuntimeWanLinkConfig, WanLinkConfig};
+        let link: WanLinkConfig =
+            serde_json::from_value(serde_json::json!({"attach_iface_name":"eth0"})).unwrap();
+        let mut cfg = RuntimeWanLinkConfig::from_config(&link).health_check;
+        let routes = landscape_core::route::test_used_ip_route();
+        let probe: Arc<dyn WanHealthProbe> =
+            Arc::new(FakeProbe(|_| panic!("disabled IPv4 probed")));
+        for ipv6 in [false, true] {
+            cfg.ipv4_probe_enabled = ipv6;
+            cfg.ipv6_probe_enabled = !ipv6;
+            let mut family = FamilyState::new(link.id, &cfg);
+            let address = if ipv6 { "2001:db8::1" } else { "192.0.2.1" }.parse().unwrap();
+            let groups = vec![WanProbeGroup {
+                name: "disabled".into(),
+                quorum: 1,
+                targets: vec![WanProbeTarget::Icmp { address }],
+            }];
+            round(
+                &mut family,
+                Some(address),
+                ipv6,
+                link.id,
+                &SessionIface::new(1, "eth0", None),
+                &groups,
+                &cfg,
+                &probe,
+                &routes,
+            )
+            .await;
+            assert!(family.source.is_none() && family.probes.is_empty());
+            assert!(routes.get_link_health_for_family(link.id, ipv6).await.is_none());
+        }
+    }
+
     #[test]
     fn locally_broken_probe_does_not_reduce_quorum() {
         assert_eq!(group_verdict(1, 1, 2), GroupVerdict::Unknown);

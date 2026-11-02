@@ -81,25 +81,23 @@ impl LandscapeDBStore<Uuid> for WanLinkConfig {
 }
 
 impl WanLinkConfig {
-    /// Automatic failover must have evidence for every enabled address family.
-    /// Reused when saving a flow and when editing a WAN it already references.
+    /// Enabled probe families need evidence. An explicitly disabled family
+    /// follows the other family's verdict; route availability is still separate.
     pub fn validate_failover_health(&self) -> Result<(), ServiceConfigError> {
-        let (v4, v6) = match &self.health_check.probe {
-            WanHealthProbeConfig::Multi { groups } => (
-                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv4())),
-                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv6())),
-            ),
-            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
-                (*probe_gateway || targets.iter().any(|ip| ip.is_ipv4()), false)
-            }
-            WanHealthProbeConfig::Dns { .. } | WanHealthProbeConfig::Http { .. } => (true, false),
-        };
+        let (v4, v6) = self.health_check.probe_families();
+        let health = &self.health_check;
         let ipv6_enabled =
             self.pd.enable || matches!(self.v4.model, WanLinkV4Model::Static { ipv6: Some(_), .. });
-        if !self.health_check.enable || (self.v4.enable && !v4) || (ipv6_enabled && !v6) {
+        let usable = (self.v4.enable && health.ipv4_probe_enabled && v4)
+            || (ipv6_enabled && health.ipv6_probe_enabled && v6);
+        if !health.enable
+            || !usable
+            || (self.v4.enable && health.ipv4_probe_enabled && !v4)
+            || (ipv6_enabled && health.ipv6_probe_enabled && !v6)
+        {
             return Err(ServiceConfigError::InvalidConfig {
                 reason: format!(
-                    "WAN '{}' requires enabled health checks for every enabled address family before automatic failover (IPv4 probe: {v4}, IPv6 probe: {v6}); configure dual-stack probe groups when IPv6 is enabled",
+                    "WAN '{}' requires enabled health checks, at least one usable probe family and targets for each enabled probe switch before automatic failover (IPv4 probe: {v4}, IPv6 probe: {v6}); configure missing targets or disable that family's probe switch to follow the other family",
                     self.attach_iface_name,
                 ),
             });
@@ -276,11 +274,17 @@ pub const MAX_HEALTH_TARGETS: usize = 4;
 /// Health check section of a link: probes the link's connectivity through
 /// its own iface/source and reports a debounced verdict to the route
 /// service. Disabled by default.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WanLinkHealthCheckConfig {
     #[serde(default)]
     pub enable: bool,
+    /// When disabled, inherit the IPv6 probe verdict without probing IPv4.
+    #[serde(default = "probe_enabled_by_default")]
+    pub ipv4_probe_enabled: bool,
+    /// When disabled, inherit the IPv4 probe verdict without probing IPv6.
+    #[serde(default = "probe_enabled_by_default")]
+    pub ipv6_probe_enabled: bool,
     /// Probe method with its targets.
     #[serde(default)]
     pub probe: WanHealthProbeConfig,
@@ -301,6 +305,41 @@ pub struct WanLinkHealthCheckConfig {
     /// Probe targets that must answer for a round to succeed; `None` = 1.
     #[serde(default)]
     pub reliability: Option<u8>,
+}
+
+fn probe_enabled_by_default() -> bool {
+    true
+}
+
+impl Default for WanLinkHealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            ipv4_probe_enabled: true,
+            ipv6_probe_enabled: true,
+            probe: Default::default(),
+            interval_secs: None,
+            timeout_ms: None,
+            failure_threshold: None,
+            recovery_threshold: None,
+            reliability: None,
+        }
+    }
+}
+
+impl WanLinkHealthCheckConfig {
+    pub fn probe_families(&self) -> (bool, bool) {
+        match &self.probe {
+            WanHealthProbeConfig::Multi { groups } => (
+                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv4())),
+                groups.iter().any(|g| g.targets.iter().any(|p| p.address().is_ipv6())),
+            ),
+            WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
+                (*probe_gateway || targets.iter().any(|ip| ip.is_ipv4()), false)
+            }
+            WanHealthProbeConfig::Dns { .. } | WanHealthProbeConfig::Http { .. } => (true, false),
+        }
+    }
 }
 
 /// Probe method of a health check; each variant owns its target
@@ -561,6 +600,14 @@ impl ValidatableConfig for WanLinkConfig {
         validate_nat_range("icmp_in_range", &self.nat.icmp_in_range)?;
 
         let health = &self.health_check;
+        let (v4_probe, v6_probe) = health.probe_families();
+        if health.enable
+            && !(health.ipv4_probe_enabled && v4_probe || health.ipv6_probe_enabled && v6_probe)
+        {
+            return Err(ServiceConfigError::InvalidConfig {
+                reason: "health_check needs at least one enabled probe family with targets or probe_gateway".into(),
+            });
+        }
         let target_count = match &health.probe {
             WanHealthProbeConfig::Multi { groups } => {
                 validate_probe_groups(groups)?;
@@ -725,6 +772,45 @@ mod tests {
         assert!(config.validate_failover_health().is_ok());
         config.health_check.enable = false;
         assert!(config.validate_failover_health().is_err());
+    }
+
+    #[test]
+    fn probe_switches_default_on_and_explicit_off_is_preserved() {
+        let old: WanLinkHealthCheckConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old, WanLinkHealthCheckConfig::default());
+        assert!(old.ipv4_probe_enabled && old.ipv6_probe_enabled);
+        let mut config = minimal();
+        config.v4.enable = true;
+        config.pd.enable = true;
+        config.health_check.enable = true;
+        config.health_check.probe = WanHealthProbeConfig::Dns {
+            server: "223.5.5.5".parse().unwrap(),
+            domain: "www.baidu.com".into(),
+        };
+        assert!(config.validate_failover_health().is_err());
+        config.health_check.ipv6_probe_enabled = false;
+        assert!(config.validate_failover_health().is_ok());
+        let roundtrip: WanLinkConfig =
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert!(!roundtrip.health_check.ipv6_probe_enabled);
+        config.health_check.ipv4_probe_enabled = false;
+        assert!(config.validate().is_err());
+        assert!(config.validate_failover_health().is_err());
+        config.health_check.ipv6_probe_enabled = true;
+        assert!(config.validate().is_err(), "legacy IPv4 target cannot drive IPv6-only probes");
+        config.health_check.probe = WanHealthProbeConfig::Multi {
+            groups: vec![WanProbeGroup {
+                name: "IPv6".into(),
+                quorum: 1,
+                targets: vec![WanProbeTarget::Icmp { address: "2400:3200::1".parse().unwrap() }],
+            }],
+        };
+        assert!(config.validate_failover_health().is_ok());
+        config.pd.enable = false;
+        assert!(
+            config.validate_failover_health().is_err(),
+            "cannot follow a family with no address acquisition"
+        );
     }
 
     #[test]

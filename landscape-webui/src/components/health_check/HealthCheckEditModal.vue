@@ -129,6 +129,45 @@ async function save_config() {
     @after-enter="on_modal_enter"
   >
     <n-form ref="form_ref" :model="link.health_check" :rules="form_rules">
+      <n-form-item :label="t('network.health_check.ipv4_probe')">
+        <n-switch
+          v-model:value="link.health_check.ipv4_probe_enabled"
+          :disabled="
+            link.health_check.enable &&
+            link.health_check.ipv4_probe_enabled &&
+            !link.health_check.ipv6_probe_enabled
+          "
+        />
+      </n-form-item>
+      <n-form-item :label="t('network.health_check.ipv6_probe')">
+        <n-switch
+          v-model:value="link.health_check.ipv6_probe_enabled"
+          :disabled="
+            link.health_check.enable &&
+            link.health_check.ipv6_probe_enabled &&
+            !link.health_check.ipv4_probe_enabled
+          "
+        />
+      </n-form-item>
+      <n-alert type="info" :show-icon="false" style="margin-bottom: 12px">
+        {{ t("network.health_check.family_hint") }}
+      </n-alert>
+      <n-alert
+        v-if="
+          link.health_check.ipv4_probe_enabled !==
+          link.health_check.ipv6_probe_enabled
+        "
+        type="warning"
+        :show-icon="false"
+        style="margin-bottom: 12px"
+      >
+        {{
+          t("network.health_check.follow_family", {
+            follower: link.health_check.ipv4_probe_enabled ? "IPv6" : "IPv4",
+            source: link.health_check.ipv4_probe_enabled ? "IPv4" : "IPv6",
+          })
+        }}
+      </n-alert>
       <n-form-item :label="t('network.health_check.method')">
         <n-select
           :value="link.health_check.probe.t"

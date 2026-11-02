@@ -698,6 +698,14 @@ mod wan_link_ref_tests {
         wan.health_check.probe = v4_only;
         let error = provider.wan_link_store().validate_cross(&mut wan).await.unwrap_err();
         assert!(error.to_string().contains("IPv6 probe: false"));
+        // Explicitly opting out of IPv6 probing is valid for both save paths.
+        wan.health_check.ipv6_probe_enabled = false;
+        assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_ok());
+        provider.wan_link_store().upsert(wan.clone()).await.unwrap();
+        assert!(provider.flow_rule_store().validate_cross(&mut flow).await.is_ok());
+        wan.health_check.ipv4_probe_enabled = false;
+        assert!(provider.wan_link_store().validate_cross(&mut wan).await.is_err());
+        wan.health_check.ipv4_probe_enabled = true;
         // Once automatic failover is off, the WAN can use a legacy IPv4-only probe.
         flow.failover.enable = false;
         provider.flow_rule_store().upsert(flow).await.unwrap();

@@ -659,6 +659,8 @@ fn health_config(
     landscape_common::wan_link::RuntimeWanLinkHealthCheckConfig {
         socket_mark: 0,
         enable: true,
+        ipv4_probe_enabled: true,
+        ipv6_probe_enabled: true,
         probe: landscape_common::wan_link::RuntimeWanHealthProbe::Icmp {
             targets,
             probe_gateway: false,
@@ -693,4 +695,89 @@ async fn wait_status(handle: &ServiceHandle, want: ServiceStatus) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("section status did not reach {want:?} in time");
+}
+
+#[test]
+fn probe_family_toggle_only_restarts_health_section() {
+    let old = link_config(false);
+    let mut new = old.clone();
+    new.health_check.ipv6_probe_enabled = false;
+    assert_eq!(config_change_tags(&old, &new), vec![SectionTag::HealthCheck]);
+}
+
+#[tokio::test]
+async fn disabled_probe_family_inherits_faults_recovery_and_unknown_in_both_directions() {
+    use landscape_common::wan_link::{HealthEvaluator, WanLinkHealthState};
+    let routes = landscape_core::route::test_used_ip_route();
+    let id = Uuid::new_v4();
+    for source_v6 in [false, true] {
+        let mut cfg = health_config(vec!["223.5.5.5".parse().unwrap()]);
+        cfg.ipv4_probe_enabled = !source_v6;
+        cfg.ipv6_probe_enabled = source_v6;
+        for state in [
+            WanLinkHealthState::Healthy,
+            WanLinkHealthState::Unhealthy,
+            WanLinkHealthState::Healthy,
+            WanLinkHealthState::Unknown,
+        ] {
+            let mut info = HealthEvaluator::new(id, 1, 1, 1).info().clone();
+            info.state = state;
+            routes.update_link_health_for_family(info.clone(), source_v6).await;
+            super::health_check::sync_followed_family(&routes, id, &cfg).await;
+            assert_eq!(routes.get_link_health_for_family(id, !source_v6).await, Some(info));
+        }
+        routes.clear_link_health_for_family(id, source_v6).await;
+        super::health_check::sync_followed_family(&routes, id, &cfg).await;
+        assert!(routes.get_link_health_for_family(id, !source_v6).await.is_none());
+    }
+    let cfg = health_config(vec![]); // both switches on: independent verdicts
+    let mut info = HealthEvaluator::new(id, 1, 1, 1).info().clone();
+    info.state = WanLinkHealthState::Healthy;
+    routes.update_link_health(info).await;
+    super::health_check::sync_followed_family(&routes, id, &cfg).await;
+    assert!(routes.get_link_health_for_family(id, true).await.is_none());
+}
+
+#[tokio::test]
+async fn legacy_probe_runner_publishes_and_clears_the_disabled_family() {
+    use super::probe::{FakeProbe, WanHealthProbe};
+    use landscape_common::wan_link::WanLinkHealthState;
+    let routes = landscape_core::route::test_used_ip_route();
+    let id = Uuid::new_v4();
+    let (state, _rx) = LinkStateHandle::new(None);
+    state.session_up(SessionIface::new(1, "eth0", None), Some(lease([10, 0, 0, 2])));
+    let probe: Arc<dyn WanHealthProbe> =
+        Arc::new(FakeProbe(|_| Ok(Some(Duration::from_millis(1)))));
+    let mut cfg = health_config(vec!["223.5.5.5".parse().unwrap()]);
+    cfg.ipv6_probe_enabled = false;
+    let status = ServiceHandle::new();
+    status.just_change_status(ServiceStatus::Staring);
+    let runner = tokio::spawn(super::health_check::run(
+        id,
+        SessionIface::new(1, "eth0", None),
+        state,
+        cfg,
+        status.clone(),
+        probe,
+        routes.clone(),
+        runtime_slot(),
+    ));
+    wait_health(&routes, id, WanLinkHealthState::Healthy).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if routes
+                .get_link_health_for_family(id, true)
+                .await
+                .is_some_and(|h| h.state == WanLinkHealthState::Healthy)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    status.just_change_status(ServiceStatus::Stopping);
+    tokio::time::timeout(Duration::from_secs(2), runner).await.unwrap().unwrap();
+    assert!(routes.get_link_health_for_family(id, true).await.is_none());
 }

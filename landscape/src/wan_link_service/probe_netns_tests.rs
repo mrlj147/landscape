@@ -1,5 +1,5 @@
 //! Privileged tests use disposable network namespaces and local responders.
-//! Only WAN2 has a main-table default; bound WAN1 probes need their own gateway.
+//! Only WAN2 initially has a main default. Removing it must not break WAN1.
 use super::application_probe::probe_target;
 use landscape_common::{
     sys_service::route_service::{RouteTargetInfo, WanRouteTarget},
@@ -65,6 +65,7 @@ fn health_probes_are_confined_and_recover_in_both_families() {
         std::io::Error::last_os_error()
     );
     ip(&["link", "set", "lo", "up"]);
+    std::fs::write("/proc/sys/net/ipv4/conf/all/rp_filter", "0\n").unwrap();
     let mut peers = Vec::new();
     for n in 1..=2 {
         let name = format!("fo-probe-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
@@ -75,6 +76,8 @@ fn health_probes_are_confined_and_recover_in_both_families() {
         ip(&["link", "add", &dev, "type", "veth", "peer", "name", &remote]);
         ip(&["link", "set", &remote, "netns", &peer.name]);
         ip(&["link", "set", &dev, "up"]);
+        // Native PPP interfaces can inherit loose RPF from the distribution.
+        std::fs::write(format!("/proc/sys/net/ipv4/conf/{dev}/rp_filter"), "2\n").unwrap();
         ip(&["addr", "add", &format!("198.18.{n}.1/30"), "dev", &dev]);
         ip(&["-6", "addr", "add", &format!("fd00:{n}::1/64"), "dev", &dev, "nodad"]);
         for args in [vec!["link", "set", "lo", "up"], vec!["link", "set", &remote, "up"]] {
@@ -167,6 +170,32 @@ fn health_probes_are_confined_and_recover_in_both_families() {
         check(1, ipv6, true);
         check(2, ipv6, true);
     }
+    // The primary disconnect removes the only main default. A secondary WAN
+    // with its own policy table must still receive ICMP/DNS/HTTP replies.
+    ip(&["route", "del", "default"]);
+    ip(&["-6", "route", "del", "default"]);
+    for ipv6 in [false, true] {
+        check(1, ipv6, true);
+        check(2, ipv6, true);
+    }
+    // Recreating/reconfiguring a PPP interface can restore the inherited RPF.
+    // The reconcile loop must repair it again without requiring a restart.
+    std::fs::write("/proc/sys/net/ipv4/conf/w1/rp_filter", "2\n").unwrap();
+    let dropped = rt
+        .block_on(probe_target(
+            "w1",
+            "198.18.1.1".parse().unwrap(),
+            &WanProbeTarget::Dns {
+                server: "198.19.0.53".parse().unwrap(),
+                domain: "probe.test".into(),
+            },
+            Duration::from_millis(250),
+            0x0200_0001,
+        ))
+        .unwrap();
+    assert!(dropped.is_none(), "loose RPF should reproduce the dropped reply");
+    rt.block_on(landscape_ebpf::maps::route::sync_bound_wan_routes(&bindings)).unwrap();
+    check(1, false, true);
     // Both WAN peers use the same link-local address. The scope must select
     // the intended interface rather than relying on the default route.
     for n in 1..=2 {

@@ -193,11 +193,13 @@ pub struct RuntimeWanLinkMssConfig {
 }
 
 /// Health-check section with defaults filled in and the probe enum
-/// resolved (IPv6 filtered out).
+/// resolved (legacy ICMP targets remain IPv4-only).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeWanLinkHealthCheckConfig {
     pub socket_mark: u32,
     pub enable: bool,
+    pub ipv4_probe_enabled: bool,
+    pub ipv6_probe_enabled: bool,
     pub probe: RuntimeWanHealthProbe,
     pub interval_secs: u16,
     pub timeout_ms: u16,
@@ -259,6 +261,8 @@ impl RuntimeWanLinkHealthCheckConfig {
                 0,
             )),
             enable: config.enable,
+            ipv4_probe_enabled: config.ipv4_probe_enabled,
+            ipv6_probe_enabled: config.ipv6_probe_enabled,
             probe,
             interval_secs: config.interval_secs.unwrap_or(DEFAULT_HEALTH_INTERVAL_SECS),
             timeout_ms: config.timeout_ms.unwrap_or(DEFAULT_HEALTH_TIMEOUT_MS),

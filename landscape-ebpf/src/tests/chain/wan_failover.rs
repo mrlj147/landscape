@@ -390,6 +390,8 @@ fn bound_wan_gateway_without_main_default_and_reconciliation() {
     let ns = NetNsGuard::create("fobind");
     let _enter = ns.enter();
     ip(&["link", "set", "lo", "up"]);
+    std::fs::write("/proc/sys/net/ipv4/conf/all/rp_filter", "0\n").unwrap();
+    std::fs::write("/proc/sys/net/ipv4/conf/lo/rp_filter", "2\n").unwrap();
     let wan1 = VethPair::create("fba");
     let wan2 = VethPair::create("fbb");
     for (dev, v4, v6) in [
@@ -439,6 +441,21 @@ fn bound_wan_gateway_without_main_default_and_reconciliation() {
     for _ in 0..2 {
         rt.block_on(sync_bound_wan_routes(&targets)).unwrap();
     }
+    assert_eq!(
+        std::fs::read_to_string("/proc/sys/net/ipv4/conf/lo/rp_filter").unwrap().trim(),
+        "2",
+        "unmanaged interface policies must not change"
+    );
+    // An administrator's global RPF override is reported, never silently
+    // lowered. It must not prevent installation of IPv4/IPv6 socket routes.
+    std::fs::write("/proc/sys/net/ipv4/conf/all/rp_filter", "2\n").unwrap();
+    let error = rt.block_on(sync_bound_wan_routes(&targets)).unwrap_err();
+    assert!(error.contains("all.rp_filter=2"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string("/proc/sys/net/ipv4/conf/all/rp_filter").unwrap().trim(),
+        "2"
+    );
+    std::fs::write("/proc/sys/net/ipv4/conf/all/rp_filter", "0\n").unwrap();
     for (family, dst, gateway, peer) in [
         ("-4", "203.0.113.10", "198.18.1.2", "198.18.1.3"),
         ("-6", "2001:db8::10", "fd00:1::2", "fd00:1::3"),

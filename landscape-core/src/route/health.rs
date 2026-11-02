@@ -84,7 +84,19 @@ impl IpRouteService {
     }
 
     pub async fn get_link_health(&self, link_id: Uuid) -> Option<WanLinkHealthInfo> {
-        self.link_healths.read().await.get(&link_id).cloned()
+        self.get_link_health_for_family(link_id, false).await
+    }
+
+    pub async fn get_link_health_for_family(
+        &self,
+        link_id: Uuid,
+        ipv6: bool,
+    ) -> Option<WanLinkHealthInfo> {
+        if ipv6 {
+            self.link_healths_v6.read().await.get(&link_id).cloned()
+        } else {
+            self.link_healths.read().await.get(&link_id).cloned()
+        }
     }
 
     pub async fn get_link_healths(&self) -> LinkHealths {
