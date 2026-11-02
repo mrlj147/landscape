@@ -178,6 +178,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v4_failure_does_not_change_v6_health() {
+        let service = service();
+        let link = Uuid::new_v4();
+        service.update_link_health_for_family(info(link, WanLinkHealthState::Healthy), true).await;
+        service.update_link_health(info(link, WanLinkHealthState::Unhealthy)).await;
+        assert_eq!(
+            service.get_link_healths_for_family(true).await[&link].state,
+            WanLinkHealthState::Healthy
+        );
+        service.remove_ipv4_link_route(link).await;
+        assert_eq!(
+            service.get_link_healths_for_family(true).await[&link].state,
+            WanLinkHealthState::Healthy
+        );
+    }
+
+    #[tokio::test]
     async fn clear_broadcasts_only_for_real_verdicts() {
         let service = service();
         let link = Uuid::new_v4();

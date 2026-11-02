@@ -1,5 +1,17 @@
 export default {
   failover: {
+    health: {
+      healthy: "正常",
+      unhealthy: "探测失败",
+      unknown: "检测中",
+      disconnected: "未连接",
+    },
+
+    bind_default: "默认 Flow 也使用此主备策略",
+    bind_router: "路由器自身流量也跟随切换",
+    binding_hint:
+      "全局只能指定一个默认主备策略。路由器流量选项保留局域网和已有具体路由；DNS 上游可在 DNS 设置中单独绑定。",
+
     advanced: "高级切换设置",
     unknown_grace: "状态未知宽限期（秒）",
     fail_open: "宽限结束后仍尝试状态未知的出口",

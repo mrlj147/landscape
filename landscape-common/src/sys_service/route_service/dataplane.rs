@@ -39,6 +39,11 @@ pub trait RouteTableDataplane: Send + Sync {
     /// own). Returns `false` when the sync failed and should be retried.
     async fn sync_kernel_default_ipv4(&self, nexthops: &[RouteTargetInfo]) -> bool;
 
+    /// Own only dedicated, tagged rules/table for unmarked host traffic.
+    async fn sync_router_wan_policy(&self, _policy: Option<&super::RouterWanPolicy>) -> bool {
+        true
+    }
+
     /// Recreate the LAN verdict-cache inner maps (invalidate all cached
     /// verdicts).
     fn invalidate_lan_cache(&self);

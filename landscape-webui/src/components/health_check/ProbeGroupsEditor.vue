@@ -13,6 +13,16 @@ function target(kind: "icmp" | "dns" | "http", v6 = false): WanProbeTarget {
     return { t: kind, dns_server: ip, url: "https://www.baidu.com" };
   return { t: "icmp", address: ip };
 }
+function addTarget(group: WanProbeGroup) {
+  const first = group.targets[0];
+  const ip =
+    first.t === "icmp"
+      ? first.address
+      : first.t === "dns"
+        ? first.server
+        : first.dns_server;
+  group.targets.push(target("icmp", ip.includes(":")));
+}
 function changeKind(
   group: WanProbeGroup,
   index: number,

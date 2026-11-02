@@ -432,6 +432,19 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             landscape_common::service::ServiceConfigError::InvalidConfig { reason: e.to_string() }
         }
 
+        if config.enable && config.failover.bind_default_flow {
+            let configs = self
+                .list()
+                .await
+                .map_err(landscape_common::service::ServiceConfigError::internal)?;
+            if configs.iter().any(|other| {
+                other.id != config.id && other.enable && other.failover.bind_default_flow
+            }) {
+                return Err(landscape_common::service::ServiceConfigError::InvalidConfig {
+                    reason: "only one enabled flow may control the default WAN policy".into(),
+                });
+            }
+        }
         // Interface targets reference wan links by uuid; resolve strictly
         // and refresh the net-iface name mirror.
         if config.flow_targets.iter().any(|t| matches!(t.target, FlowTarget::Interface { .. })) {
@@ -553,6 +566,24 @@ mod wan_link_ref_tests {
         let id = Uuid::new_v4();
         provider.wan_link_store().upsert(link(id, "eth1", pppd("ppp0"))).await.unwrap();
         (provider, id)
+    }
+
+    #[tokio::test]
+    async fn default_wan_binding_has_one_enabled_owner() {
+        use landscape_common::database::validator::StoreValidator;
+        let (provider, link_id) = setup().await;
+        let mut owner = flow_config(link_id, "ppp0");
+        owner.failover.mode = landscape_common::flow::FlowTargetMode::PrimaryBackup;
+        owner.failover.bind_default_flow = true;
+        provider.flow_rule_store().upsert(owner.clone()).await.unwrap();
+        let mut candidate = owner.clone();
+        candidate.id = Uuid::new_v4();
+        candidate.flow_id = 2;
+        assert!(provider.flow_rule_store().validate_cross(&mut candidate).await.is_err());
+        assert!(provider.flow_rule_store().validate_cross(&mut owner).await.is_ok());
+        owner.enable = false;
+        provider.flow_rule_store().upsert(owner).await.unwrap();
+        assert!(provider.flow_rule_store().validate_cross(&mut candidate).await.is_ok());
     }
 
     #[tokio::test]

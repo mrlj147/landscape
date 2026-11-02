@@ -60,9 +60,12 @@ pub(super) fn collect_target_refresh_result(
 #[derive(Default)]
 pub(super) struct FailoverSelections {
     active: HashMap<(FlowId, bool), ActiveFailover>,
+    pub(super) default_owner: Option<FlowId>,
+    default_source_generation: HashMap<bool, u64>,
     published: HashMap<(FlowId, bool), Vec<(WanRouteTarget, u32)>>,
 }
 
+#[derive(Clone)]
 struct ActiveFailover {
     order: Vec<Uuid>,
     selected: Option<Uuid>,
@@ -364,7 +367,7 @@ impl IpRouteService {
         };
         let mut v4 = get(false);
         let mut v6 = get(true);
-        if flow_id == 0 && !selections.published.contains_key(&(0, false)) {
+        if flow_id == 0 && selections.default_owner.is_none() {
             v4 = self
                 .clone_ipv4_wan_infos()
                 .await
@@ -405,12 +408,63 @@ impl IpRouteService {
         let mut selections = self.failover_selections.lock().await;
         let health = self.clone_link_healths().await;
         let ipv4_wan_infos = self.clone_ipv4_wan_infos().await;
-        let ipv4_result = selections.resolve(flow_configs, &ipv4_wan_infos, &health, false);
+        let mut ipv4_result = selections.resolve(flow_configs, &ipv4_wan_infos, &health, false);
 
         let ipv6_wan_infos = self.clone_ipv6_wan_infos().await;
         let health_v6 = self.get_link_healths_for_family(true).await;
-        let ipv6_result = selections.resolve(flow_configs, &ipv6_wan_infos, &health_v6, true);
+        let mut ipv6_result = selections.resolve(flow_configs, &ipv6_wan_infos, &health_v6, true);
 
+        let default = flow_configs
+            .iter()
+            .find(|c| c.enable && c.failover.bind_default_flow && c.failover.ordered_targets());
+        let owner_changed = selections.default_owner != default.map(|c| c.flow_id);
+        let was_default = selections.default_owner.is_some();
+        selections.default_owner = default.map(|c| c.flow_id);
+        for (ipv6, result, routes) in
+            [(false, &mut ipv4_result, &ipv4_wan_infos), (true, &mut ipv6_result, &ipv6_wan_infos)]
+        {
+            if let Some(config) = default {
+                result.insert(0, result.get(&config.flow_id).cloned().unwrap_or_default());
+                if let Some(mut alias) = selections.active.get(&(config.flow_id, ipv6)).cloned() {
+                    let source_changed =
+                        selections.default_source_generation.get(&ipv6) != Some(&alias.generation);
+                    selections.default_source_generation.insert(ipv6, alias.generation);
+                    let old_generation = selections
+                        .active
+                        .get(&(0, ipv6))
+                        .map_or(alias.generation, |s| s.generation);
+                    alias.generation =
+                        old_generation.wrapping_add(u64::from(owner_changed || source_changed));
+                    alias.status.flow_id = 0;
+                    selections.active.insert((0, ipv6), alias);
+                }
+            } else if was_default {
+                result.insert(
+                    0,
+                    routes
+                        .values()
+                        .find(|r| r.info.default_route)
+                        .cloned()
+                        .map(|r| vec![(r, 1)])
+                        .unwrap_or_default(),
+                );
+                selections.active.remove(&(0, ipv6));
+                self.dataplane.set_connection_generation(0, ipv6, None);
+            }
+        }
+        let router_policy = default.filter(|c| c.failover.bind_router_traffic).map(|_| {
+            landscape_common::sys_service::route_service::RouterWanPolicy {
+                ipv4: ipv4_result.get(&0).and_then(|r| r.first()).map(|(r, _)| r.info.clone()),
+                ipv6: ipv6_result.get(&0).and_then(|r| r.first()).map(|(r, _)| r.info.clone()),
+            }
+        });
+        {
+            let mut current = self.router_wan_policy.write().await;
+            if *current != router_policy {
+                *current = router_policy;
+                self.kernel_default_notify.notify_one();
+            }
+        }
         let ipv4_updates = selections.changed_targets(ipv4_result.clone(), false);
         let ipv6_updates = selections.changed_targets(ipv6_result.clone(), true);
         let changed = !ipv4_updates.is_empty() || !ipv6_updates.is_empty();
@@ -438,6 +492,15 @@ impl IpRouteService {
                 self.dataplane.set_connection_generation(config.flow_id, ipv6, generation);
             }
         }
+        if default.is_some() {
+            for ipv6 in [false, true] {
+                self.dataplane.set_connection_generation(
+                    0,
+                    ipv6,
+                    selections.active.get(&(0, ipv6)).map(|s| s.generation),
+                );
+            }
+        }
         if changed {
             self.dataplane.invalidate_lan_cache();
         }
@@ -447,12 +510,25 @@ impl IpRouteService {
     /// deleted).
     pub async fn clear_flow_wan_targets(&self, flow_id: FlowId) {
         let mut selections = self.failover_selections.lock().await;
+        let clear_default = selections.default_owner == Some(flow_id);
+        if clear_default {
+            selections.default_owner = None;
+            selections.remove(0);
+            self.dataplane.set_connection_generation(0, false, None);
+            self.dataplane.set_connection_generation(0, true, None);
+            *self.router_wan_policy.write().await = None;
+            self.kernel_default_notify.notify_one();
+        }
         selections.remove(flow_id);
         self.dataplane.set_connection_generation(flow_id, false, None);
         self.dataplane.set_connection_generation(flow_id, true, None);
         self.dataplane.del_wan_slots_v4(flow_id);
         self.dataplane.del_wan_slots_v6(flow_id);
         self.dataplane.invalidate_lan_cache();
+        drop(selections);
+        if clear_default {
+            self.refresh_default_router().await;
+        }
     }
 }
 
@@ -463,6 +539,51 @@ mod failover_tests {
     use landscape_common::sys_service::route_service::RouteTargetInfo;
     use landscape_common::wan_link::HealthEvaluator;
     use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    async fn default_alias_tracks_sticky_selection_and_clears_on_disable() {
+        let (mut config, mut routes, health, primary, backup) = setup();
+        config.failover.bind_default_flow = true;
+        config.failover.bind_router_traffic = true;
+        config.failover.auto_failback = false;
+        routes.get_mut(&RouteOwner::Link(primary)).unwrap().info.default_route = true;
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route).await;
+        }
+        for (_, mut state) in health {
+            if state.link_id == primary {
+                state.state = WanLinkHealthState::Unhealthy;
+            }
+            service.update_link_health(state).await;
+        }
+        service.sync_flow_wan_targets(&[config.clone()]).await;
+        let status = service.get_flow_wan_statuses().await;
+        assert!(status.iter().filter(|s| !s.ipv6).all(|s| s.active_link_id == Some(backup)));
+        assert_eq!(service.dns_wan_binding(0).await.ipv4.unwrap().0, "wan2");
+        let mut restored = HealthEvaluator::new(primary, 1, 1, 1).info().clone();
+        restored.state = WanLinkHealthState::Healthy;
+        service.update_link_health(restored).await;
+        service.refresh_default_router().await;
+        service.sync_flow_wan_targets(&[config.clone()]).await;
+        assert_eq!(
+            service.dns_wan_binding(0).await.ipv4.unwrap().0,
+            "wan2",
+            "route refresh cannot override sticky default policy"
+        );
+        config.failover.enable = false;
+        service.sync_flow_wan_targets(&[config.clone()]).await;
+        assert_eq!(
+            service.dns_wan_binding(0).await.ipv4.unwrap().0,
+            "wan1",
+            "manual mode takes precedence"
+        );
+        config.failover.bind_default_flow = false;
+        config.failover.bind_router_traffic = false;
+        service.sync_flow_wan_targets(&[config]).await;
+        assert!(service.get_flow_wan_statuses().await.iter().all(|s| s.flow_id != 0));
+        assert!(service.router_wan_policy.read().await.is_none());
+    }
 
     fn setup() -> (FlowConfig, WanRoutesByOwner, LinkHealths, Uuid, Uuid) {
         let primary = Uuid::from_u128(1);

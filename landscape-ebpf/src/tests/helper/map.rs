@@ -102,6 +102,9 @@ pub(crate) fn make_rt6_cache_key(local: Ipv6Addr, remote: Ipv6Addr) -> Route6Cac
     Route6CacheKey {
         local_addr: local.to_bits().to_be_bytes(),
         remote_addr: remote.to_bits().to_be_bytes(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
         ..Default::default()
     }
 }
@@ -110,6 +113,9 @@ pub(crate) fn make_rt4_cache_key(local: Ipv4Addr, remote: Ipv4Addr) -> Route4Cac
     Route4CacheKey {
         local_addr: local.to_bits().to_be(),
         remote_addr: remote.to_bits().to_be(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
         ..Default::default()
     }
 }
@@ -269,6 +275,9 @@ pub(crate) fn lookup_rt4_cache_value<T: MapCore>(
     let key = Route4CacheKey {
         local_addr: local.to_bits().to_be(),
         remote_addr: remote.to_bits().to_be(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
         ..Default::default()
     };
     inner
@@ -481,4 +490,36 @@ impl TestSharedMaps {
             rt6_cache_map: pin(&paths.rt6_cache_map),
         }
     }
+}
+
+pub(crate) fn lookup_rt4_reverse_cache_value<T: MapCore>(
+    outer_map: &T,
+    cache_index: u32,
+    local: Ipv4Addr,
+    remote: Ipv4Addr,
+) -> Option<Route4CacheValue> {
+    let inner = lookup_inner_map(outer_map, cache_index);
+    let mut key = make_rt4_cache_key(local, remote);
+    key.local_port = 443_u16.to_be();
+    key.remote_port = 12345_u16.to_be();
+    inner
+        .lookup(as_bytes(&key), MapFlags::ANY)
+        .expect("lookup reverse fixture")
+        .map(|bytes| read_unaligned::<Route4CacheValue>(&bytes))
+}
+
+pub(crate) fn lookup_rt6_reverse_cache_value<T: MapCore>(
+    outer_map: &T,
+    cache_index: u32,
+    local: Ipv6Addr,
+    remote: Ipv6Addr,
+) -> Option<Route6CacheValue> {
+    let inner = lookup_inner_map(outer_map, cache_index);
+    let mut key = make_rt6_cache_key(local, remote);
+    key.local_port = 443_u16.to_be();
+    key.remote_port = 12345_u16.to_be();
+    inner
+        .lookup(as_bytes(&key), MapFlags::ANY)
+        .expect("lookup reverse fixture")
+        .map(|bytes| read_unaligned::<Route6CacheValue>(&bytes))
 }

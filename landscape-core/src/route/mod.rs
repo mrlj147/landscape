@@ -63,6 +63,8 @@ pub struct IpRouteService {
     // route change; `notify_one`'s single stored permit coalesces bursts
     // and survives across select iterations.
     pub(crate) kernel_default_notify: Arc<Notify>,
+    pub(crate) router_wan_policy:
+        ShareRwLock<Option<landscape_common::sys_service::route_service::RouterWanPolicy>>,
     pub(crate) reachable_local_ipv4_addrs: Arc<ArcSwap<Vec<IpAddr>>>,
     pub(crate) reachable_local_ipv4_addrs_by_ifindex: Arc<ArcSwap<LocalAddrsByIfindex>>,
     pub(crate) reachable_local_ipv6_addrs: Arc<ArcSwap<Vec<IpAddr>>>,
@@ -88,6 +90,7 @@ impl IpRouteService {
             ipv6_lan_ifaces: Arc::new(RwLock::new(HashMap::new())),
             kernel_default_ipv4_cache: Arc::new(RwLock::new(None)),
             kernel_default_notify: Arc::new(Notify::new()),
+            router_wan_policy: Default::default(),
             reachable_local_ipv4_addrs: Arc::new(ArcSwap::from_pointee(Vec::new())),
             reachable_local_ipv4_addrs_by_ifindex: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             reachable_local_ipv6_addrs: Arc::new(ArcSwap::from_pointee(Vec::new())),

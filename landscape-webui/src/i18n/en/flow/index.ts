@@ -1,5 +1,17 @@
 export default {
   failover: {
+    health: {
+      healthy: "Healthy",
+      unhealthy: "Probe failed",
+      unknown: "Checking",
+      disconnected: "Disconnected",
+    },
+
+    bind_default: "Apply this policy to the default Flow",
+    bind_router: "Also route host traffic through the selected WAN",
+    binding_hint:
+      "Only one flow may own the default policy. Host binding preserves LAN and more specific routes. Bind DNS upstreams separately in DNS settings.",
+
     advanced: "Advanced failover settings",
     unknown_grace: "Unknown-state grace (seconds)",
     fail_open: "Allow unknown exits after grace expires",

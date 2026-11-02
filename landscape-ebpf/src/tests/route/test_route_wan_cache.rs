@@ -9,8 +9,8 @@ use zerocopy::IntoBytes;
 use crate::tests::{
     TestSkb,
     helper::map::{
-        WAN_CACHE, WAN_IFINDEX, create_route6_cache_inner_map, local_addr, lookup_rt6_cache_value,
-        remote_addr,
+        WAN_CACHE, WAN_IFINDEX, create_route6_cache_inner_map, local_addr,
+        lookup_rt6_reverse_cache_value, remote_addr,
     },
     isolated_pin_root,
     pkt::simple_ipv6_tcp_syn,
@@ -44,15 +44,24 @@ fn v6_set_cache_in_wan_writes_reverse_key() {
 
     assert_eq!(result.return_value as i32, 0);
 
-    let reverse =
-        lookup_rt6_cache_value(&skel.maps.rt6_cache_map, WAN_CACHE, local_addr(), remote_addr())
-            .expect("reverse WAN cache entry missing");
+    let reverse = lookup_rt6_reverse_cache_value(
+        &skel.maps.rt6_cache_map,
+        WAN_CACHE,
+        local_addr(),
+        remote_addr(),
+    )
+    .expect("reverse WAN cache entry missing");
     assert_eq!(reverse.ifindex, WAN_IFINDEX);
     assert_eq!(reverse.has_mac, 1);
 
     assert!(
-        lookup_rt6_cache_value(&skel.maps.rt6_cache_map, WAN_CACHE, remote_addr(), local_addr(),)
-            .is_none(),
+        lookup_rt6_reverse_cache_value(
+            &skel.maps.rt6_cache_map,
+            WAN_CACHE,
+            remote_addr(),
+            local_addr(),
+        )
+        .is_none(),
         "forward-direction WAN cache entry should not exist"
     );
 }

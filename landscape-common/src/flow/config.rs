@@ -68,6 +68,12 @@ pub struct FlowFailoverConfig {
     pub failure_connection_policy: FlowConnectionPolicy,
     #[serde(default)]
     pub recovery_connection_policy: FlowConnectionPolicy,
+    /// Apply this ordered policy to packets using the reserved default flow.
+    #[serde(default)]
+    pub bind_default_flow: bool,
+    /// Also choose the kernel source/route for unmarked router-originated traffic.
+    #[serde(default)]
+    pub bind_router_traffic: bool,
 }
 
 fn default_unknown_grace_secs() -> u16 {
@@ -108,6 +114,8 @@ impl Default for FlowFailoverConfig {
             switch_hold_secs: default_switch_hold_secs(),
             failure_connection_policy: default_failure_connection_policy(),
             recovery_connection_policy: FlowConnectionPolicy::NewConnectionsOnly,
+            bind_default_flow: false,
+            bind_router_traffic: false,
         }
     }
 }
@@ -150,6 +158,11 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
                     "flow_id {DEFAULT_FLOW_ID} is reserved for the default flow and cannot be used by a flow config"
                 ),
             });
+        }
+        if (self.failover.bind_default_flow && !self.failover.ordered_targets())
+            || (self.failover.bind_router_traffic && !self.failover.bind_default_flow)
+        {
+            return Err(ServiceConfigError::InvalidConfig { reason: "default/router WAN binding requires an ordered flow; router binding also requires default flow binding".into() });
         }
         for rule in &self.flow_match_rules {
             rule.validate()?;

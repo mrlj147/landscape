@@ -32,6 +32,27 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
           t("flow.failover.remaining", { seconds: row.retry_after_secs })
         }}</n-text>
       </n-space>
+      <n-space>
+        <n-tag
+          v-for="candidate in row.candidates"
+          :key="candidate.link_id"
+          size="small"
+          :type="
+            !candidate.route_available || candidate.health === 'unhealthy'
+              ? 'error'
+              : candidate.health === 'healthy'
+                ? 'success'
+                : 'warning'
+          "
+        >
+          {{ candidate.iface_name || candidate.link_id }} ·
+          {{
+            t(
+              `flow.failover.health.${candidate.route_available ? candidate.health : "disconnected"}`,
+            )
+          }}
+        </n-tag>
+      </n-space>
       <n-collapse v-if="row.history.length">
         <n-collapse-item
           :title="t('flow.failover.history')"
@@ -51,6 +72,9 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
             >
             <n-text depth="3">{{
               t(`flow.failover.reason.${event.reason}`)
+            }}</n-text>
+            <n-text depth="3">{{
+              t(`flow.failover.${event.connection_policy}`)
             }}</n-text>
           </n-flex>
         </n-collapse-item>

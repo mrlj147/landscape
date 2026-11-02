@@ -69,6 +69,8 @@ const failover_enabled = computed({
 });
 function restoreWeightedMode() {
   if (rule.value?.failover) {
+    rule.value.failover.bind_default_flow = false;
+    rule.value.failover.bind_router_traffic = false;
     rule.value.failover.mode = "weighted";
     rule.value.failover.enable = false;
   }
@@ -82,6 +84,8 @@ async function enter() {
   }
 
   rule.value.failover = {
+    bind_default_flow: false,
+    bind_router_traffic: false,
     unknown_grace_secs: 30,
     fail_open_on_unknown: false,
     failback_delay_secs: 30,
@@ -127,6 +131,8 @@ async function saveRule() {
   }
 
   rule.value.failover = {
+    bind_default_flow: false,
+    bind_router_traffic: false,
     unknown_grace_secs: 30,
     fail_open_on_unknown: false,
     failback_delay_secs: 30,
@@ -258,11 +264,29 @@ function normalizeFlowTargets(
       >
         <n-switch v-model:value="rule.failover.auto_failback" />
       </n-form-item>
-      <n-collapse v-if="rule.failover?.enable" style="margin-bottom: 16px">
+      <n-collapse
+        v-if="rule.failover && ordered_targets"
+        style="margin-bottom: 16px"
+      >
         <n-collapse-item
           :title="t('flow.failover.advanced')"
           name="failover-advanced"
         >
+          <n-form-item :label="t('flow.failover.bind_default')">
+            <n-switch
+              v-model:value="rule.failover.bind_default_flow"
+              @update:value="
+                !$event && (rule.failover.bind_router_traffic = false)
+              "
+            />
+          </n-form-item>
+          <n-form-item :label="t('flow.failover.bind_router')">
+            <n-switch
+              v-model:value="rule.failover.bind_router_traffic"
+              :disabled="!rule.failover.bind_default_flow"
+            />
+          </n-form-item>
+          <n-text depth="3">{{ t("flow.failover.binding_hint") }}</n-text>
           <n-form-item :label="t('flow.failover.unknown_grace')"
             ><n-input-number
               v-model:value="rule.failover.unknown_grace_secs"

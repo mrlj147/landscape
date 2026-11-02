@@ -253,6 +253,13 @@ impl IpRouteService {
     }
 
     pub async fn refresh_default_router(&self) {
+        // Same writer lock as flow selection: a route event cannot overwrite an
+        // opt-in default-flow policy with the legacy first-default-WAN choice.
+        let selections = self.failover_selections.lock().await;
+        if selections.default_owner.is_some() {
+            self.kernel_default_notify.notify_one();
+            return;
+        }
         let ipv4_default = self
             .ipv4_wan_ifaces
             .read()
@@ -315,6 +322,12 @@ impl IpRouteService {
                         _ = ticker.tick() => {}
                     }
                     service.reconcile_kernel_default_ipv4().await;
+                    let policy = service.router_wan_policy.read().await;
+                    if !service.dataplane.sync_router_wan_policy(policy.as_ref()).await {
+                        tracing::error!(
+                            "router WAN binding sync failed; retrying on next reconcile"
+                        );
+                    }
                 }
             },
         );

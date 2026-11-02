@@ -296,6 +296,13 @@ impl RouteTableDataplane for EbpfRouteTableDataplane {
         }
     }
 
+    async fn sync_router_wan_policy(
+        &self,
+        policy: Option<&landscape_common::sys_service::route_service::RouterWanPolicy>,
+    ) -> bool {
+        maps::route::sync_router_wan_policy(policy).await
+    }
+
     fn invalidate_lan_cache(&self) {
         maps::route::cache::recreate_route_lan_cache_inner_map(&self.rt.paths);
     }

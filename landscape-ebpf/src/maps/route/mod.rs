@@ -12,6 +12,8 @@ mod connection;
 pub use connection::*;
 mod init;
 mod lan;
+mod router;
+pub use router::sync_router_wan_policy;
 mod trace;
 pub(crate) mod types;
 mod wan;
