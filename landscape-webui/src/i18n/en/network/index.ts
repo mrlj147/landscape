@@ -45,6 +45,12 @@ export default {
     clamp_value: "Clamp Value",
   },
   health_check: {
+    multi: "Multiple targets / IPv4 + IPv6",
+    multi_hint:
+      "Each group must meet its quorum. All groups within an address family must pass. IPv4 and IPv6 are evaluated and switched independently. Use one address family per group.",
+    group_name: "Group name",
+    quorum: "Required successful targets",
+
     method: "Probe method",
     application_hint:
       "Probes stay on this WAN. HTTP success/redirect responses pass; DNS must return IPv4 answers. HTTP resolution also uses the specified upstream DNS server.",

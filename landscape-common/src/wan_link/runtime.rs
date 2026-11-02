@@ -204,10 +204,19 @@ pub struct RuntimeWanLinkHealthCheckConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeWanHealthProbe {
+    Multi {
+        groups: Vec<super::WanProbeGroup>,
+    },
     /// Resolve an A record through this WAN's chosen IPv4 DNS server.
-    Dns { server: std::net::Ipv4Addr, domain: String },
+    Dns {
+        server: std::net::Ipv4Addr,
+        domain: String,
+    },
     /// HTTP(S) GET, including DNS resolution, confined to this WAN.
-    Http { url: String, dns_server: std::net::Ipv4Addr },
+    Http {
+        url: String,
+        dns_server: std::net::Ipv4Addr,
+    },
 
     /// ICMP echo with resolved IPv4 targets.
     Icmp {
@@ -220,6 +229,9 @@ pub enum RuntimeWanHealthProbe {
 impl RuntimeWanLinkHealthCheckConfig {
     fn from_config(config: &WanLinkHealthCheckConfig) -> Self {
         let probe = match &config.probe {
+            WanHealthProbeConfig::Multi { groups } => {
+                RuntimeWanHealthProbe::Multi { groups: groups.clone() }
+            }
             WanHealthProbeConfig::Dns { server, domain } => {
                 RuntimeWanHealthProbe::Dns { server: *server, domain: domain.clone() }
             }

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ApiFlowConfig as FlowConfig } from "@landscape-router/types/api/schemas";
+import FlowWanStatus from "./FlowWanStatus.vue";
 import FlowEditModal from "@/components/flow/FlowEditModal.vue";
 import DnsRuleDrawer from "@/components/dns/DnsRuleDrawer.vue";
 import { useFrontEndStore } from "@/stores/front_end_config";
@@ -111,6 +112,14 @@ const show_remark = computed(
     </template>
 
     <template #footer>
+      <FlowWanStatus
+        v-if="
+          config.enable &&
+          (config.failover?.enable ||
+            config.failover?.mode === 'primary_backup')
+        "
+        :flow-id="config.flow_id"
+      />
       <!-- <n-flex>
         <n-tag :bordered="false" v-for="rule in config.flow_match_rules">
           {{ `${rule.ip} - ${rule.qos ?? "N/A"} - ${rule.vlan_id ?? "N/A"}` }}

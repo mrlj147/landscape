@@ -133,7 +133,7 @@ pub enum PdRuntime {
 #[serde(rename_all = "snake_case")]
 pub struct HealthProbeStatus {
     #[cfg_attr(feature = "openapi", schema(value_type = String))]
-    pub target: Ipv4Addr,
+    pub target: std::net::IpAddr,
     #[cfg_attr(
         feature = "openapi",
         schema(required = true, nullable = true, value_type = Option<u64>)

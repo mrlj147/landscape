@@ -1,5 +1,30 @@
 export default {
   failover: {
+    advanced: "Advanced failover settings",
+    unknown_grace: "Unknown-state grace (seconds)",
+    fail_open: "Allow unknown exits after grace expires",
+    failback_delay: "Continuous healthy time before failback (seconds)",
+    switch_hold: "Minimum interval between non-emergency switches (seconds)",
+    failure_connection_policy: "Connections on failure",
+    recovery_connection_policy: "Connections on recovery",
+    new_connections_only: "New connections only; preserve existing exits",
+    reset_existing:
+      "Reselect existing exits (applications may need to reconnect)",
+    active: "Active exit",
+    no_exit: "No available exit",
+    status_unavailable: "Exit status unavailable",
+    remaining: "{seconds} seconds remaining",
+    history: "Recent switches (cleared on restart)",
+    reason: {
+      manual_primary: "Fixed primary",
+      healthy: "Healthy exit",
+      startup_grace: "Unknown; grace period",
+      unknown_fail_open: "Unknown; fail open",
+      waiting_failback: "Waiting for stable recovery",
+      sticky_backup: "Keep current healthy exit",
+      no_available_wan: "No available WAN",
+    },
+
     restore_weighted: "Restore weighted routing mode",
     enable: "Enable WAN failover",
     auto_failback: "Return to primary WAN after recovery",

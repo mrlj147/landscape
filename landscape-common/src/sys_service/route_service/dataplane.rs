@@ -23,6 +23,10 @@ pub trait RouteTableDataplane: Send + Sync {
     /// Replace the IPv6 WAN target slots of `flow_id`.
     fn replace_wan_slots_v6(&self, flow_id: FlowId, targets: &[(WanRouteTarget, u32)]);
 
+    /// Configure per-connection exit retention. Changing the generation clears
+    /// this flow/family's existing affinities; None disables connection retention.
+    fn set_connection_generation(&self, _flow_id: FlowId, _ipv6: bool, _generation: Option<u64>) {}
+
     /// Drop all IPv4 WAN target slots of `flow_id`.
     fn del_wan_slots_v4(&self, flow_id: FlowId);
 

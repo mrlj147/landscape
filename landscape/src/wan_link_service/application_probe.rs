@@ -1,11 +1,11 @@
 //! Application probes never use the router's default DNS or proxy. Both the
 //! DNS socket and HTTP socket are confined to the WAN under test.
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType};
-use landscape_common::wan_link::RuntimeWanHealthProbe;
+use landscape_common::wan_link::{RuntimeWanHealthProbe, WanProbeTarget};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::UdpSocket;
 
@@ -17,18 +17,36 @@ pub(super) async fn probe(
     method: &RuntimeWanHealthProbe,
     timeout: Duration,
 ) -> Result<Option<Duration>, ProbeError> {
+    let target = match method {
+        RuntimeWanHealthProbe::Dns { server, domain } => {
+            WanProbeTarget::Dns { server: (*server).into(), domain: domain.clone() }
+        }
+        RuntimeWanHealthProbe::Http { url, dns_server } => {
+            WanProbeTarget::Http { url: url.clone(), dns_server: (*dns_server).into() }
+        }
+        _ => return Err(ProbeError::Config("expected an application probe".into())),
+    };
+    probe_target(dev, src.into(), &target, timeout).await
+}
+
+pub(super) async fn probe_target(
+    dev: &str,
+    src: IpAddr,
+    method: &WanProbeTarget,
+    timeout: Duration,
+) -> Result<Option<Duration>, ProbeError> {
     let start = Instant::now();
     let round = async {
         match method {
-            RuntimeWanHealthProbe::Dns { server, domain } => {
+            WanProbeTarget::Dns { server, domain } => {
                 Ok(!resolve(dev, src, *server, domain).await?.is_empty())
             }
-            RuntimeWanHealthProbe::Http { url, dns_server } => {
+            WanProbeTarget::Http { url, dns_server } => {
                 let url =
                     reqwest::Url::parse(url).map_err(|e| ProbeError::Config(e.to_string()))?;
                 let host =
                     url.host_str().ok_or_else(|| ProbeError::Config("missing HTTP host".into()))?;
-                let addresses = match host.parse::<Ipv4Addr>() {
+                let addresses = match host.trim_matches(['[', ']']).parse::<IpAddr>() {
                     Ok(ip) => vec![ip],
                     Err(_) => resolve(dev, src, *dns_server, host).await?,
                 };
@@ -40,7 +58,7 @@ pub(super) async fn probe(
                 let client = reqwest::Client::builder()
                     .no_proxy()
                     .interface(dev)
-                    .local_address(std::net::IpAddr::V4(src))
+                    .local_address(src)
                     .resolve_to_addrs(host, &addresses)
                     // Following redirects could introduce a new hostname resolved
                     // by the system. A 3xx itself is an answered HTTP request.
@@ -52,7 +70,9 @@ pub(super) async fn probe(
                     response.status().is_success() || response.status().is_redirection()
                 }))
             }
-            RuntimeWanHealthProbe::Icmp { .. } => unreachable!("ICMP uses the injected ping probe"),
+            WanProbeTarget::Icmp { address } => {
+                Ok(super::probe::ping_ip(dev, src, *address, timeout).await?.is_some())
+            }
         }
     };
     match tokio::time::timeout(timeout, round).await {
@@ -64,20 +84,24 @@ pub(super) async fn probe(
 
 async fn resolve(
     dev: &str,
-    src: Ipv4Addr,
-    server: Ipv4Addr,
+    src: IpAddr,
+    server: IpAddr,
     domain: &str,
-) -> Result<Vec<Ipv4Addr>, ProbeError> {
+) -> Result<Vec<IpAddr>, ProbeError> {
     resolve_at(dev, src, SocketAddr::from((server, 53)), domain).await
 }
 
 async fn resolve_at(
     dev: &str,
-    src: Ipv4Addr,
+    src: IpAddr,
     server: SocketAddr,
     domain: &str,
-) -> Result<Vec<Ipv4Addr>, ProbeError> {
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+) -> Result<Vec<IpAddr>, ProbeError> {
+    let socket = Socket::new(
+        if src.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 },
+        Type::DGRAM,
+        Some(Protocol::UDP),
+    )?;
     socket.bind_device(Some(dev.as_bytes()))?;
     socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
     socket.set_nonblocking(true)?;
@@ -88,7 +112,9 @@ async fn resolve_at(
     name.set_fqdn(true);
     let mut request = Message::new(rand::random(), MessageType::Query, OpCode::Query);
     request.metadata.recursion_desired = true;
-    request.queries.push(Query::query(name, RecordType::A));
+    request
+        .queries
+        .push(Query::query(name, if src.is_ipv6() { RecordType::AAAA } else { RecordType::A }));
     let bytes = request.to_vec().map_err(|e| ProbeError::Config(e.to_string()))?;
     // Network errors are link evidence, not local checker failures.
     if socket.connect(server).await.is_err() || socket.send(&bytes).await.is_err() {
@@ -111,7 +137,8 @@ async fn resolve_at(
             .answers
             .iter()
             .filter_map(|record| match &record.data {
-                RData::A(address) => Some(address.0),
+                RData::A(address) if src.is_ipv4() => Some(IpAddr::V4(address.0)),
+                RData::AAAA(address) if src.is_ipv6() => Some(IpAddr::V6(address.0)),
                 _ => None,
             })
             .collect());
@@ -165,13 +192,13 @@ mod tests {
         });
         let addresses = tokio::time::timeout(
             Duration::from_secs(2),
-            resolve_at("lo", Ipv4Addr::LOCALHOST, addr, "test.example"),
+            resolve_at("lo", Ipv4Addr::LOCALHOST.into(), addr, "test.example"),
         )
         .await
         .unwrap()
         .unwrap();
         task.await.unwrap();
-        assert_eq!(addresses, [Ipv4Addr::new(192, 0, 2, 10)]);
+        assert_eq!(addresses, [IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))]);
     }
 
     #[tokio::test]

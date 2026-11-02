@@ -48,6 +48,21 @@ pub(super) async fn run(
     route_service: IpRouteService,
     runtime: Arc<ArcSwap<HealthCheckRuntime>>,
 ) {
+    if let RuntimeWanHealthProbe::Multi { groups } = &config.probe {
+        let groups = groups.clone();
+        return super::multi_probe::run(
+            link_id,
+            iface,
+            link_state,
+            config,
+            service_status,
+            probe,
+            route_service,
+            runtime,
+            groups,
+        )
+        .await;
+    }
     let stop = service_status.stop_token();
 
     // This section runs with SectionScope::SessionAndLease: the framework
@@ -60,6 +75,7 @@ pub(super) async fn run(
     };
 
     let targets = match &config.probe {
+        RuntimeWanHealthProbe::Multi { .. } => unreachable!("multi probe has its own runner"),
         RuntimeWanHealthProbe::Icmp { targets, .. } => targets.clone(),
         RuntimeWanHealthProbe::Dns { server, .. } => vec![*server],
         RuntimeWanHealthProbe::Http { dns_server, .. } => vec![*dns_server],
@@ -82,7 +98,7 @@ pub(super) async fn run(
             rtt_ewma_ms: evaluator.info().rtt_ewma_ms,
             probes: targets
                 .iter()
-                .map(|target| HealthProbeStatus { target: *target, rtt_ms: None })
+                .map(|target| HealthProbeStatus { target: (*target).into(), rtt_ms: None })
                 .collect(),
         },
     );
@@ -107,7 +123,7 @@ pub(super) async fn run(
                     match &config.probe {
                         RuntimeWanHealthProbe::Icmp { .. } => probe_round(&probe, &iface.iface_name, src, &round_targets, config.timeout_ms).await,
                         method => match super::application_probe::probe(&iface.iface_name, src, method, Duration::from_millis(config.timeout_ms.into())).await {
-                            Ok(rtt) => RoundOutcome::Evidence(vec![TargetProbe { target: round_targets[0], rtt }]),
+                            Ok(rtt) => RoundOutcome::Evidence(vec![TargetProbe { target: round_targets[0].into(), rtt }]),
                             Err(error) => {
                                 tracing::warn!(%link_id, %error, "application health probe failed locally");
                                 RoundOutcome::Blind { errored: 1 }
@@ -185,10 +201,10 @@ fn publish_round(
     let probes = attempted
         .iter()
         .map(|target| HealthProbeStatus {
-            target: *target,
+            target: (*target).into(),
             rtt_ms: evidence.and_then(|ev| {
                 ev.iter()
-                    .find(|p| p.target == *target)
+                    .find(|p| p.target == IpAddr::V4(*target))
                     .and_then(|p| p.rtt.map(|rtt| rtt.as_millis() as u64))
             }),
         })
@@ -238,7 +254,7 @@ async fn probe_round(
         let dev = dev.to_string();
         async move {
             match probe.ping_v4(&dev, src, target, timeout).await {
-                Ok(rtt) => Some(TargetProbe { target, rtt }),
+                Ok(rtt) => Some(TargetProbe { target: target.into(), rtt }),
                 Err(err) => {
                     tracing::warn!(iface = %dev, target = %target, error = %err, "health-check probe error");
                     None

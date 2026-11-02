@@ -44,6 +44,12 @@ export default {
     clamp_value: "钳制值",
   },
   health_check: {
+    multi: "多目标 / IPv4 + IPv6",
+    multi_hint:
+      "组内达到成功数量门槛才通过；同一地址族的所有组都必须通过。IPv4 与 IPv6 分组检测、独立切换。每组目标使用同一地址族。",
+    group_name: "分组名称",
+    quorum: "至少成功的目标数",
+
     method: "探测方式",
     application_hint:
       "探测固定使用当前 WAN。HTTP 成功或跳转响应视为正常；DNS 需返回查询域名的 IPv4 地址。HTTP 的 DNS 解析也使用下方指定的上游。",

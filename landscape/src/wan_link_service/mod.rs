@@ -2,6 +2,7 @@ mod application_probe;
 mod firewall;
 mod health_check;
 mod mss;
+mod multi_probe;
 mod nat4;
 mod nat6;
 mod pd;
@@ -481,7 +482,7 @@ impl ServiceStarterTrait for WanLinkService {
             SectionKind::HealthCheck,
             task_label::task::WAN_LINK_HEALTH_CHECK,
             health_check_enabled,
-            |state| state.has_v4_lease(),
+            |state| state.has_v4_lease() || state.has_v6_prefix(),
             SectionScope::SessionAndLease,
             {
                 let probe = self.health_probe.clone();
@@ -520,6 +521,7 @@ impl ServiceStarterTrait for WanLinkService {
 fn health_check_enabled(cfg: &WanLinkConfig) -> bool {
     cfg.health_check.enable
         && match &cfg.health_check.probe {
+            WanHealthProbeConfig::Multi { groups } => !groups.is_empty(),
             WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
                 !targets.is_empty() || *probe_gateway
             }

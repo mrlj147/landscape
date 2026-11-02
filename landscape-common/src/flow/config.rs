@@ -52,6 +52,44 @@ pub struct FlowFailoverConfig {
     pub enable: bool,
     #[serde(default = "default_auto_failback")]
     pub auto_failback: bool,
+    /// Keep a route during startup/reconfiguration while probes have no verdict.
+    #[serde(default = "default_unknown_grace_secs")]
+    pub unknown_grace_secs: u16,
+    /// After grace, allow an unknown (never a known failed) configured WAN.
+    #[serde(default)]
+    pub fail_open_on_unknown: bool,
+    /// Higher-priority WAN must remain healthy this long before failback.
+    #[serde(default = "default_failback_delay_secs")]
+    pub failback_delay_secs: u16,
+    /// Minimum time between non-emergency switches; failures bypass this hold.
+    #[serde(default = "default_switch_hold_secs")]
+    pub switch_hold_secs: u16,
+    #[serde(default = "default_failure_connection_policy")]
+    pub failure_connection_policy: FlowConnectionPolicy,
+    #[serde(default)]
+    pub recovery_connection_policy: FlowConnectionPolicy,
+}
+
+fn default_unknown_grace_secs() -> u16 {
+    30
+}
+fn default_failback_delay_secs() -> u16 {
+    30
+}
+fn default_switch_hold_secs() -> u16 {
+    5
+}
+fn default_failure_connection_policy() -> FlowConnectionPolicy {
+    FlowConnectionPolicy::ResetExisting
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FlowConnectionPolicy {
+    #[default]
+    NewConnectionsOnly,
+    ResetExisting,
 }
 
 fn default_auto_failback() -> bool {
@@ -64,6 +102,12 @@ impl Default for FlowFailoverConfig {
             mode: FlowTargetMode::Weighted,
             enable: false,
             auto_failback: true,
+            unknown_grace_secs: default_unknown_grace_secs(),
+            fail_open_on_unknown: false,
+            failback_delay_secs: default_failback_delay_secs(),
+            switch_hold_secs: default_switch_hold_secs(),
+            failure_connection_policy: default_failure_connection_policy(),
+            recovery_connection_policy: FlowConnectionPolicy::NewConnectionsOnly,
         }
     }
 }
@@ -126,6 +170,14 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
         }
 
         if self.failover.ordered_targets() {
+            if self.failover.unknown_grace_secs > 600
+                || self.failover.failback_delay_secs > 3600
+                || self.failover.switch_hold_secs > 3600
+            {
+                return Err(ServiceConfigError::InvalidConfig {
+                    reason: "WAN grace must be <= 600s and failback/hold must be <= 3600s".into(),
+                });
+            }
             let mut links = std::collections::HashSet::new();
             let min_targets = if self.failover.enable { 2 } else { 1 };
             if self.flow_targets.len() < min_targets

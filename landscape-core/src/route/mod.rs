@@ -50,6 +50,7 @@ pub struct IpRouteService {
     pub(crate) ipv6_wan_ifaces: ShareRwLock<WanRoutesByOwner>,
     pub(crate) wan_route_events: broadcast::Sender<WanRouteEvent>,
     pub(crate) link_healths: ShareRwLock<health::LinkHealths>,
+    pub(crate) link_healths_v6: ShareRwLock<health::LinkHealths>,
     pub(crate) health_events: broadcast::Sender<health::WanLinkHealthEvent>,
 
     pub(crate) ipv4_lan_ifaces: ShareRwLock<Ipv4LanRoutesByOwner>,
@@ -81,6 +82,7 @@ impl IpRouteService {
             ipv6_wan_ifaces: Arc::new(RwLock::new(HashMap::new())),
             wan_route_events: broadcast::channel(64).0,
             link_healths: Arc::new(RwLock::new(HashMap::new())),
+            link_healths_v6: Arc::new(RwLock::new(HashMap::new())),
             health_events: broadcast::channel(64).0,
             ipv4_lan_ifaces: Arc::new(RwLock::new(HashMap::new())),
             ipv6_lan_ifaces: Arc::new(RwLock::new(HashMap::new())),

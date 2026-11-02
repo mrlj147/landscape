@@ -197,7 +197,7 @@ impl IpRouteService {
         // A link without its v4 WAN route has nothing to probe; its health
         // verdict is stale.
         if let RouteOwner::Link(link_id) = owner {
-            self.clear_link_health(*link_id).await;
+            self.clear_link_health_for_family(*link_id, false).await;
         }
         if had_removed {
             self.notify_wan_route_change(owner, IpFamily::Ipv4, WanRouteEventKind::Removed);
@@ -208,6 +208,9 @@ impl IpRouteService {
         let removed = self.ipv6_wan_ifaces.write().await.remove(owner);
         let had_removed = removed.is_some();
         self.apply_removed_ipv6_wan_route(removed).await;
+        if let RouteOwner::Link(link_id) = owner {
+            self.clear_link_health_for_family(*link_id, true).await;
+        }
         if had_removed {
             self.notify_wan_route_change(owner, IpFamily::Ipv6, WanRouteEventKind::Removed);
         }

@@ -81,7 +81,17 @@ async function enter() {
     rule.value = flow_config_default();
   }
 
-  rule.value.failover ??= { enable: false, auto_failback: true };
+  rule.value.failover = {
+    unknown_grace_secs: 30,
+    fail_open_on_unknown: false,
+    failback_delay_secs: 30,
+    switch_hold_secs: 5,
+    failure_connection_policy: "reset_existing",
+    recovery_connection_policy: "new_connections_only",
+    enable: false,
+    auto_failback: true,
+    ...rule.value.failover,
+  };
   rule.value.flow_targets = normalizeFlowTargets(rule.value.flow_targets);
 
   rule_json.value = JSON.stringify(rule.value);
@@ -116,7 +126,17 @@ async function saveRule() {
     return;
   }
 
-  rule.value.failover ??= { enable: false, auto_failback: true };
+  rule.value.failover = {
+    unknown_grace_secs: 30,
+    fail_open_on_unknown: false,
+    failback_delay_secs: 30,
+    switch_hold_secs: 5,
+    failure_connection_policy: "reset_existing",
+    recovery_connection_policy: "new_connections_only",
+    enable: false,
+    auto_failback: true,
+    ...rule.value.failover,
+  };
   rule.value.flow_targets = normalizeFlowTargets(rule.value.flow_targets);
 
   if (rule.value.flow_id == -1) {
@@ -238,6 +258,59 @@ function normalizeFlowTargets(
       >
         <n-switch v-model:value="rule.failover.auto_failback" />
       </n-form-item>
+      <n-collapse v-if="rule.failover?.enable" style="margin-bottom: 16px">
+        <n-collapse-item
+          :title="t('flow.failover.advanced')"
+          name="failover-advanced"
+        >
+          <n-form-item :label="t('flow.failover.unknown_grace')"
+            ><n-input-number
+              v-model:value="rule.failover.unknown_grace_secs"
+              :min="0"
+              :max="600"
+              :clearable="false"
+          /></n-form-item>
+          <n-form-item :label="t('flow.failover.fail_open')"
+            ><n-switch v-model:value="rule.failover.fail_open_on_unknown"
+          /></n-form-item>
+          <n-form-item :label="t('flow.failover.failback_delay')"
+            ><n-input-number
+              v-model:value="rule.failover.failback_delay_secs"
+              :min="0"
+              :max="3600"
+              :clearable="false"
+          /></n-form-item>
+          <n-form-item :label="t('flow.failover.switch_hold')"
+            ><n-input-number
+              v-model:value="rule.failover.switch_hold_secs"
+              :min="0"
+              :max="3600"
+              :clearable="false"
+          /></n-form-item>
+          <n-form-item
+            v-for="key in [
+              'failure_connection_policy',
+              'recovery_connection_policy',
+            ] as const"
+            :key="key"
+            :label="t(`flow.failover.${key}`)"
+          >
+            <n-select
+              v-model:value="rule.failover[key]"
+              :options="[
+                {
+                  label: t('flow.failover.new_connections_only'),
+                  value: 'new_connections_only',
+                },
+                {
+                  label: t('flow.failover.reset_existing'),
+                  value: 'reset_existing',
+                },
+              ]"
+            />
+          </n-form-item>
+        </n-collapse-item>
+      </n-collapse>
       <n-alert v-if="ordered_targets" type="info" style="margin-bottom: 16px">{{
         t("flow.failover.hint")
       }}</n-alert>

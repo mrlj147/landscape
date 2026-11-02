@@ -256,6 +256,10 @@ impl RouteTableDataplane for EbpfRouteTableDataplane {
         maps::route::replace_wan_route_slots_v6(&self.rt.paths, flow_id, targets);
     }
 
+    fn set_connection_generation(&self, flow_id: u32, ipv6: bool, generation: Option<u64>) {
+        maps::route::set_connection_generation(&self.rt.paths, flow_id, ipv6, generation);
+    }
+
     fn del_wan_slots_v4(&self, flow_id: u32) {
         maps::route::del_wan_route_slots_v4(&self.rt.paths, flow_id);
     }

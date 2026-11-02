@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMessage, type FormInst, type FormRules } from "naive-ui";
 import { HelpCircleOutline } from "@vicons/ionicons5";
+import ProbeGroupsEditor from "./ProbeGroupsEditor.vue";
 import ConfigModal from "@/components/common/ConfigModal.vue";
 import { create_wan_link, update_wan_link } from "@/api/service_wan_link";
 import { is_ipv4 } from "@/lib/common";
@@ -63,13 +64,30 @@ const form_rules: FormRules = {
   },
 };
 
-function setProbeMethod(method: "icmp" | "http" | "dns") {
+function setProbeMethod(method: "icmp" | "http" | "dns" | "multi") {
   link.value.health_check.probe =
-    method === "icmp"
-      ? { t: "icmp", targets: [], probe_gateway: false }
-      : method === "dns"
-        ? { t: "dns", server: "223.5.5.5", domain: "www.baidu.com" }
-        : { t: "http", url: "https://www.baidu.com", dns_server: "223.5.5.5" };
+    method === "multi"
+      ? {
+          t: "multi",
+          groups: [
+            {
+              name: "IPv4 DNS",
+              quorum: 1,
+              targets: [
+                { t: "dns", server: "223.5.5.5", domain: "www.baidu.com" },
+              ],
+            },
+          ],
+        }
+      : method === "icmp"
+        ? { t: "icmp", targets: [], probe_gateway: false }
+        : method === "dns"
+          ? { t: "dns", server: "223.5.5.5", domain: "www.baidu.com" }
+          : {
+              t: "http",
+              url: "https://www.baidu.com",
+              dns_server: "223.5.5.5",
+            };
   link.value.health_check.reliability = 1;
 }
 
@@ -112,12 +130,17 @@ async function save_config() {
             { label: 'Ping (ICMP)', value: 'icmp' },
             { label: 'HTTP / HTTPS', value: 'http' },
             { label: 'DNS', value: 'dns' },
+            { label: t('network.health_check.multi'), value: 'multi' },
           ]"
         />
       </n-form-item>
       <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">{{
         t("network.health_check.application_hint")
       }}</n-alert>
+      <ProbeGroupsEditor
+        v-if="link.health_check.probe.t === 'multi'"
+        v-model="link.health_check.probe.groups"
+      />
       <template v-if="link.health_check.probe.t === 'http'">
         <n-form-item :label="t('network.health_check.http_url')"
           ><n-input

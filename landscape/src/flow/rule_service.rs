@@ -66,9 +66,12 @@ impl FlowRuleService {
         spawn_task(task_label::task::FLOW_WAN_ROUTE_OBSERVER, async move {
             let mut events = wan_route_events;
             let mut health_events = health_events;
+            let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 let event = tokio::select! {
                     event = events.recv() => event.map(|_| ()),
+                    _ = timer.tick() => Ok(()),
                     event = health_events.recv() => event.map(|_| ()),
                 };
                 match event {

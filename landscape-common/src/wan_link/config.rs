@@ -284,6 +284,8 @@ pub struct WanLinkHealthCheckConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum WanHealthProbeConfig {
+    /// Every group for an address family must pass; each group has its own quorum.
+    Multi { groups: Vec<WanProbeGroup> },
     /// Resolve an A record through this WAN's chosen IPv4 DNS server.
     Dns {
         #[cfg_attr(feature = "openapi", schema(value_type = String))]
@@ -309,6 +311,107 @@ pub enum WanHealthProbeConfig {
         #[serde(default)]
         probe_gateway: bool,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WanProbeGroup {
+    pub name: String,
+    pub quorum: u8,
+    pub targets: Vec<WanProbeTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum WanProbeTarget {
+    Icmp {
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        address: IpAddr,
+    },
+    Dns {
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        server: IpAddr,
+        domain: String,
+    },
+    Http {
+        url: String,
+        #[cfg_attr(feature = "openapi", schema(value_type = String))]
+        dns_server: IpAddr,
+    },
+}
+
+impl WanProbeTarget {
+    pub fn address(&self) -> IpAddr {
+        match self {
+            Self::Icmp { address } => *address,
+            Self::Dns { server, .. } => *server,
+            Self::Http { dns_server, .. } => *dns_server,
+        }
+    }
+}
+
+pub fn validate_probe_groups(groups: &[WanProbeGroup]) -> Result<(), ServiceConfigError> {
+    let invalid = |reason: &str| ServiceConfigError::InvalidConfig { reason: reason.into() };
+    if groups.is_empty() || groups.len() > 4 {
+        return Err(invalid("configure between 1 and 4 probe groups"));
+    }
+    for group in groups {
+        if group.targets.is_empty()
+            || group.targets.len() > MAX_HEALTH_TARGETS
+            || group.quorum == 0
+            || usize::from(group.quorum) > group.targets.len()
+        {
+            return Err(invalid(
+                "each probe group needs 1..4 targets and quorum within its target count",
+            ));
+        }
+        let ipv6 = group.targets[0].address().is_ipv6();
+        let mut unique = std::collections::HashSet::new();
+        for target in &group.targets {
+            let ip = target.address();
+            if ip.is_ipv6() != ipv6
+                || ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || matches!(ip, IpAddr::V4(v) if v.is_broadcast())
+                || matches!(ip, IpAddr::V6(v) if v.is_unicast_link_local())
+            {
+                return Err(invalid(
+                    "probe targets in each group must use one address family and routable unicast addresses",
+                ));
+            }
+            if !unique.insert(serde_json::to_string(target).unwrap()) {
+                return Err(invalid("duplicate probe targets cannot count toward quorum"));
+            }
+            match target {
+                WanProbeTarget::Dns { domain, .. }
+                    if domain.trim().is_empty()
+                        || hickory_proto::rr::Name::from_ascii(domain).is_err() =>
+                {
+                    return Err(invalid("invalid DNS probe domain"));
+                }
+                WanProbeTarget::Http { url, .. } => {
+                    let valid = url::Url::parse(url).is_ok_and(|url| {
+                        matches!(url.scheme(), "http" | "https")
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && match url.host() {
+                                Some(url::Host::Ipv4(_)) => !ipv6,
+                                Some(url::Host::Ipv6(_)) => ipv6,
+                                _ => true,
+                            }
+                    });
+                    if !valid {
+                        return Err(invalid("HTTP probe URL must match its DNS address family"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Default for WanHealthProbeConfig {
@@ -432,6 +535,10 @@ impl ValidatableConfig for WanLinkConfig {
 
         let health = &self.health_check;
         let target_count = match &health.probe {
+            WanHealthProbeConfig::Multi { groups } => {
+                validate_probe_groups(groups)?;
+                1 // group quorums are independent from legacy reliability
+            }
             WanHealthProbeConfig::Icmp { targets, probe_gateway } => {
                 if targets.iter().any(|target| !target.is_ipv4()) {
                     return Err(ServiceConfigError::InvalidConfig {
@@ -488,7 +595,10 @@ impl ValidatableConfig for WanLinkConfig {
                     ),
                 });
             }
-            if target_count > 0 && reliability as usize > target_count {
+            if !matches!(health.probe, WanHealthProbeConfig::Multi { .. })
+                && target_count > 0
+                && reliability as usize > target_count
+            {
                 return Err(ServiceConfigError::InvalidConfig {
                     reason: format!(
                         "health_check reliability ({reliability}) must not exceed the target count ({target_count})"

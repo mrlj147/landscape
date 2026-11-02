@@ -36,6 +36,66 @@ pub trait WanHealthProbe: Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IcmpV4Probe;
 
+pub(super) async fn ping_ip(
+    dev: &str,
+    src: IpAddr,
+    target: IpAddr,
+    timeout: Duration,
+) -> Result<Option<Duration>, ProbeError> {
+    match (src, target) {
+        (IpAddr::V4(src), IpAddr::V4(target)) => {
+            IcmpV4Probe.ping_v4(dev, src, target, timeout).await
+        }
+        (IpAddr::V6(src), IpAddr::V6(target)) => {
+            let dev = dev.to_owned();
+            tokio::task::spawn_blocking(move || {
+                let socket = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
+                socket.bind_device(Some(dev.as_bytes()))?;
+                socket.bind(&SockAddr::from(SocketAddr::from((src, 0))))?;
+                let id: u16 = rand::random();
+                let seq: u16 = rand::random();
+                let request =
+                    [128, 0, 0, 0, (id >> 8) as u8, id as u8, (seq >> 8) as u8, seq as u8];
+                // Linux computes the ICMPv6 checksum, including its IPv6 pseudo-header.
+                let start = Instant::now();
+                if socket.send_to(&request, &SockAddr::from(SocketAddr::from((target, 0)))).is_err()
+                {
+                    return Ok(None);
+                }
+                let mut buf = [std::mem::MaybeUninit::<u8>::new(0); 1500];
+                loop {
+                    let remaining = timeout.saturating_sub(start.elapsed());
+                    if remaining.is_zero() {
+                        return Ok(None);
+                    }
+                    socket.set_read_timeout(Some(remaining))?;
+                    let (len, peer) = match socket.recv_from(&mut buf) {
+                        Ok(reply) => reply,
+                        Err(e)
+                            if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                        {
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(ProbeError::Socket(e)),
+                    };
+                    if len < 8 || peer.as_socket().is_none_or(|p| p.ip() != IpAddr::V6(target)) {
+                        continue;
+                    }
+                    // SAFETY: recv_from initialized the first len bytes.
+                    let reply =
+                        unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), len) };
+                    if reply[0] == 129 && reply[1] == 0 && reply[4..8] == request[4..8] {
+                        return Ok(Some(start.elapsed()));
+                    }
+                }
+            })
+            .await
+            .map_err(ProbeError::Task)?
+        }
+        _ => Err(ProbeError::Config("probe source and target address families differ".into())),
+    }
+}
+
 #[async_trait::async_trait]
 impl WanHealthProbe for IcmpV4Probe {
     async fn ping_v4(

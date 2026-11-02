@@ -8,6 +8,8 @@
 //! * `cache.rs` — verdict cache inner-map lifecycle
 
 pub mod cache;
+mod connection;
+pub use connection::*;
 mod init;
 mod lan;
 mod trace;

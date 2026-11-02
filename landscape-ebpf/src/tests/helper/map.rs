@@ -102,6 +102,7 @@ pub(crate) fn make_rt6_cache_key(local: Ipv6Addr, remote: Ipv6Addr) -> Route6Cac
     Route6CacheKey {
         local_addr: local.to_bits().to_be_bytes(),
         remote_addr: remote.to_bits().to_be_bytes(),
+        ..Default::default()
     }
 }
 
@@ -109,6 +110,7 @@ pub(crate) fn make_rt4_cache_key(local: Ipv4Addr, remote: Ipv4Addr) -> Route4Cac
     Route4CacheKey {
         local_addr: local.to_bits().to_be(),
         remote_addr: remote.to_bits().to_be(),
+        ..Default::default()
     }
 }
 
@@ -267,6 +269,7 @@ pub(crate) fn lookup_rt4_cache_value<T: MapCore>(
     let key = Route4CacheKey {
         local_addr: local.to_bits().to_be(),
         remote_addr: remote.to_bits().to_be(),
+        ..Default::default()
     };
     inner
         .lookup(as_bytes(&key), MapFlags::ANY)
