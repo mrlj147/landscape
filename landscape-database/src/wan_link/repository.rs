@@ -155,12 +155,20 @@ impl StoreValidator<WanLinkConfig> for WanLinkRepository {
                 .list()
                 .await
                 .map_err(ServiceConfigError::internal)?;
-            if let Some(flow) = flows.iter().find(|flow| flow.failover.enable && flow.flow_targets.iter().any(|entry|
-                matches!(entry.target, landscape_common::flow::FlowTarget::Interface { link_id, .. } if link_id == config.id))) {
-                if let Err(error) = config.validate_failover_health() {
-                    return Err(ServiceConfigError::InvalidConfig { reason: format!(
-                        "WAN is used by automatic failover flow {}: {}", flow.flow_id, error) });
-                }
+            let referenced_by = flows.iter().find(|flow| {
+                flow.failover.enable && flow.flow_targets.iter().any(|entry| {
+                    matches!(entry.target, landscape_common::flow::FlowTarget::Interface { link_id, .. } if link_id == config.id)
+                })
+            });
+            if let Some(flow) = referenced_by
+                && let Err(error) = config.validate_failover_health()
+            {
+                return Err(ServiceConfigError::InvalidConfig {
+                    reason: format!(
+                        "WAN is used by automatic failover flow {}: {}",
+                        flow.flow_id, error
+                    ),
+                });
             }
         }
         let others: Vec<WanLinkConfig> = self

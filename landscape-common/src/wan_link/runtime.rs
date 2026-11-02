@@ -255,7 +255,7 @@ impl RuntimeWanLinkHealthCheckConfig {
         };
         Self {
             socket_mark: u32::from(crate::flow::mark::SocketMark::new(
-                crate::flow::mark::MarkType::HostDirect { chain_id },
+                crate::flow::mark::MarkType::HostProbe { chain_id },
                 0,
             )),
             enable: config.enable,

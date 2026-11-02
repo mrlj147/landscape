@@ -367,13 +367,15 @@ int tc_wan_egress_route(struct __sk_buff *skb) {
     // SO_MARK in the HostDirect layout (bits 0-15 = chain id), e.g. the
     // DHCPv6-PD socket of a native PPPoE link.  The policy stages
     // self-skip on this mark (base/mark.h), so the packet rides the
-    // chain's terminal (PPP encapsulation) and exits untouched.
+    // chain's terminal (PPP encapsulation) and exits untouched. HostProbe
+    // uses the same pinned chain but MUST run NAT, so replies have connection
+    // state and are not rejected as unsolicited inbound traffic.
     u32 mark = skb_mark(skb);
-    if (unlikely(is_host_direct(mark))) {
+    if (unlikely(is_host_chain(mark))) {
         u32 chain = get_host_direct_chain_id(mark);
         bpf_tail_call(skb, &tc_wan_egress_roots, chain);
-        ld_from_wan_log("host-direct root tail failed chain %u; passing", chain);
-        return TC_ACT_UNSPEC;
+        ld_from_wan_log("host chain root tail failed chain %u", chain);
+        return is_host_direct(mark) ? TC_ACT_UNSPEC : TC_ACT_SHOT;
     }
 
     if (likely(current_l3_offset > 0)) {

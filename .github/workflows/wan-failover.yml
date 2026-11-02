@@ -62,7 +62,7 @@ jobs:
       - run: cargo test --locked -p landscape-webserver export_openapi_json
       - name: Compile isolated network tests
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p landscape-ebpf --features test-route,test-chain --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
+        run: cargo test --locked -p landscape-ebpf --features test-route,test-chain,test-nat --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
       - name: Real WAN failover packets in netns/veth
         if: ${{ !cancelled() }}
         run: |
@@ -76,6 +76,7 @@ jobs:
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::route:: --test-threads=1
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::helper::wire:: --test-threads=1
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" maps::route:: --test-threads=1
+          sudo env LANDSCAPE_PRIVILEGED_CI=1 "$wan_test_bin" tests::nat::v4::host_probe:: --test-threads=1
       - uses: actions/setup-node@v6
         with:
           node-version: '24'

@@ -142,7 +142,7 @@ fn health_probes_are_confined_and_recover_in_both_families() {
                     src,
                     target,
                     Duration::from_secs(2),
-                    0x0100_0000 | n,
+                    0x0200_0000 | n,
                 )
                 .await
                 .unwrap();
@@ -167,7 +167,7 @@ fn health_probes_are_confined_and_recover_in_both_families() {
                 format!("fd00:{n}::1").parse().unwrap(),
                 &WanProbeTarget::Icmp { address: "fe80::53".parse().unwrap() },
                 Duration::from_secs(2),
-                0x0100_0000 | n,
+                0x0200_0000 | n,
             ))
             .unwrap();
         assert!(result.is_some(), "link-local WAN{n} probe failed");
