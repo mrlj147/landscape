@@ -1,5 +1,13 @@
 export default {
   rule_edit: {
+    wan_groups: "Select independent DNS groups by WAN",
+    wan_groups_hint:
+      "Choose one independent upstream per WAN. DNS follows this flow’s active WAN. Groups contain their own server IPs without flow/source bindings. Missing mappings fail closed.",
+    wan_group_select: "Choose independent DNS upstream",
+    wan_group_add: "Add WAN mapping",
+    wan_groups_invalid:
+      "Select an upstream for each WAN and remove duplicate WANs.",
+
     title: "Rule Editor",
     priority: "Priority",
     remark: "Remark",

@@ -41,6 +41,20 @@ impl landscape_common::database::validator::StoreValidator<DnsUpstreamConfig>
         config: &mut DnsUpstreamConfig,
     ) -> Result<(), landscape_common::service::ServiceConfigError> {
         use landscape_common::{database::store::ConfigStore, service::ServiceConfigError};
+        if !config.is_independent_wan_group() {
+            let rules = crate::dns_rule::repository::DNSRuleRepository::new(self.db.clone())
+                .list()
+                .await
+                .map_err(ServiceConfigError::internal)?;
+            if rules
+                .iter()
+                .any(|rule| rule.wan_upstreams.iter().any(|m| m.upstream_id == config.id))
+            {
+                return Err(ServiceConfigError::InvalidConfig {
+                    reason: "This upstream is selected by a rule's WAN mapping; keep server IPs and remove its own flow/source/WAN binding".into(),
+                });
+            }
+        }
         if let Some(id) = config.bind_config.follow_flow.filter(|id| *id != 0) {
             let flows = crate::flow_rule::repository::FlowConfigRepository::new(self.db.clone())
                 .list()

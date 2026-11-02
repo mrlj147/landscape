@@ -44,6 +44,7 @@ impl DNSRuleRepository {
         let (writer, config) = (&writer, &config);
         txn_retry_loop!(self, |txn| async move {
             Self::ensure_flow_exists(txn, config.flow_id).await?;
+            Self::ensure_wan_upstreams(txn, config).await?;
             writer.upsert_inner(txn, config.clone(), true).await
         })
     }
@@ -60,6 +61,7 @@ impl DNSRuleRepository {
         txn_retry_loop!(self, |txn| async move {
             for config in configs.iter() {
                 Self::ensure_flow_exists(txn, config.flow_id).await?;
+                Self::ensure_wan_upstreams(txn, config).await?;
             }
             writer.upsert_many_inner(txn, configs, true).await
         })
@@ -101,6 +103,35 @@ impl DNSRuleRepository {
                     reason: format!("flow {flow_id} does not exist"),
                 },
             )));
+        }
+        Ok(())
+    }
+
+    async fn ensure_wan_upstreams(
+        txn: &DatabaseTransaction,
+        config: &DNSRuleConfig,
+    ) -> Result<(), UpsertErr> {
+        use crate::dns_upstream::entity::DnsUpstreamConfigEntity;
+        use crate::wan_link::entity::WanLinkConfigEntity;
+        use landscape_common::dns::config::DnsUpstreamConfig;
+        let invalid = |reason: String| {
+            UpsertErr::Database(DbError::Validation(ServiceConfigError::InvalidConfig { reason }))
+        };
+        for mapping in &config.wan_upstreams {
+            if WanLinkConfigEntity::find_by_id(mapping.link_id).one(txn).await?.is_none() {
+                return Err(invalid(format!("DNS WAN {} does not exist", mapping.link_id)));
+            }
+            let Some(upstream) =
+                DnsUpstreamConfigEntity::find_by_id(mapping.upstream_id).one(txn).await?
+            else {
+                return Err(invalid(format!(
+                    "DNS upstream {} does not exist",
+                    mapping.upstream_id
+                )));
+            };
+            if !DnsUpstreamConfig::from(upstream).is_independent_wan_group() {
+                return Err(invalid("WAN DNS groups need server IPs and must not set their own flow/source/WAN binding; the rule supplies it".into()));
+            }
         }
         Ok(())
     }
@@ -180,6 +211,8 @@ mod flow_existence_tests {
             enable: true,
             filter: FilterResult::default(),
             upstream_id: Uuid::new_v4(),
+            wan_upstreams: vec![],
+            resolved_wan: None,
             mark: Default::default(),
             source: vec![],
             flow_id,

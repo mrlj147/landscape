@@ -46,6 +46,18 @@ pub struct DnsUpstreamConfig {
     pub update_at: f64,
 }
 
+impl DnsUpstreamConfig {
+    /// Rule-level WAN selection supplies the binding. An independent group
+    /// must not carry a competing flow/source address or nested WAN selector.
+    pub fn is_independent_wan_group(&self) -> bool {
+        !self.ips.is_empty()
+            && self.bind_config.follow_flow.is_none()
+            && self.bind_config.wan_servers.is_empty()
+            && self.bind_config.bind_addr4.is_none()
+            && self.bind_config.bind_addr6.is_none()
+    }
+}
+
 impl LandscapeDBStore<Uuid> for DnsUpstreamConfig {
     fn get_id(&self) -> Uuid {
         self.id

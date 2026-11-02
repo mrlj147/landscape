@@ -606,6 +606,37 @@ mod wan_link_ref_tests {
     }
 
     #[tokio::test]
+    async fn independent_wan_groups_roundtrip_and_reject_conflicting_bindings() {
+        use landscape_common::dns::{config::DnsUpstreamConfig, rule::DnsWanUpstream};
+        let (provider, link_id) = setup().await;
+        let group = DnsUpstreamConfig::default();
+        provider.dns_upstream_config_store().checked_upsert(group.clone()).await.unwrap();
+        let mut rule: landscape_common::dns::rule::DNSRuleConfig = serde_json::from_value(serde_json::json!({
+            "name":"independent groups", "index":10, "enable":true, "flow_id":0, "upstream_id":group.id
+        })).unwrap();
+        rule.upstream_id = group.id;
+        rule.wan_upstreams = vec![DnsWanUpstream { link_id, upstream_id: group.id }];
+        let saved =
+            provider.dns_rule_store().checked_upsert_flow_rule(rule.clone()).await.unwrap().new;
+        let read = provider.dns_rule_store().find_by_id(rule.id).await.unwrap().unwrap();
+        assert_eq!(read.wan_upstreams, rule.wan_upstreams);
+        assert!(read.resolved_wan.is_none());
+        let mut invalid = saved.clone();
+        invalid.wan_upstreams[0].upstream_id = Uuid::new_v4();
+        assert!(provider.dns_rule_store().checked_upsert_flow_rule(invalid).await.is_err());
+        let mut invalid = saved.clone();
+        invalid.wan_upstreams[0].link_id = Uuid::new_v4();
+        assert!(provider.dns_rule_store().checked_upsert_flow_rule(invalid).await.is_err());
+        let mut invalid = saved;
+        invalid.wan_upstreams.push(invalid.wan_upstreams[0].clone());
+        assert!(provider.dns_rule_store().checked_upsert_flow_rule(invalid).await.is_err());
+        let mut ambiguous =
+            provider.dns_upstream_config_store().find_by_id(group.id).await.unwrap().unwrap();
+        ambiguous.bind_config.follow_flow = Some(0);
+        assert!(provider.dns_upstream_config_store().checked_upsert(ambiguous).await.is_err());
+    }
+
+    #[tokio::test]
     async fn per_wan_dns_servers_roundtrip_and_reject_missing_links() {
         let (provider, link_id) = setup().await;
         let mut upstream = landscape_common::dns::config::DnsUpstreamConfig::default();
@@ -789,6 +820,8 @@ mod cascade_delete_tests {
             enable: true,
             filter: FilterResult::default(),
             upstream_id: Uuid::new_v4(),
+            wan_upstreams: vec![],
+            resolved_wan: None,
             mark: Default::default(),
             source: vec![],
             flow_id,

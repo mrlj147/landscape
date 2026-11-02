@@ -52,7 +52,7 @@ pub const RELEASE_BOUNDARIES: &[ReleaseBoundary] = &[
     },
     ReleaseBoundary {
         version: "0.28.0",
-        terminal_migration: "m20261102_000000_flow_failover",
+        terminal_migration: "m20261102_010000_dns_wan_upstreams",
     },
 ];
 

@@ -1,5 +1,12 @@
 export default {
   rule_edit: {
+    wan_groups: "按出口选择独立 DNS 组",
+    wan_groups_hint:
+      "每条 WAN 选择一个独立上游。跟随本分流的出口自动切换；各组只填写自己的 DNS 地址，无需再绑定分流或源地址。未配置对应组时解析失败，不会混用其他组。",
+    wan_group_select: "选择独立 DNS 上游",
+    wan_group_add: "添加 WAN 对应组",
+    wan_groups_invalid: "请为每条 WAN 选择上游，并去除重复的 WAN。",
+
     title: "规则编辑",
     priority: "优先级",
     remark: "备注",

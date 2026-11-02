@@ -53,9 +53,23 @@ impl DnsConfigSource for DbDnsConfigSource {
     async fn flow_bundle(
         &self,
         flow_id: u32,
-        rules: Vec<DNSRuleConfig>,
+        mut rules: Vec<DNSRuleConfig>,
     ) -> Result<FlowConfigBundle, DnsConfigError> {
-        let upstream_ids = rules.iter().map(|rule| rule.upstream_id).collect();
+        let upstream_ids = rules
+            .iter()
+            .flat_map(|rule| {
+                std::iter::once(rule.upstream_id)
+                    .chain(rule.wan_upstreams.iter().map(|mapping| mapping.upstream_id))
+            })
+            .collect();
+        if rules.iter().any(|rule| !rule.wan_upstreams.is_empty()) {
+            let binding = self.routes.dns_wan_binding(flow_id).await;
+            for rule in &mut rules {
+                if !rule.wan_upstreams.is_empty() {
+                    rule.resolved_wan = Some(binding.clone());
+                }
+            }
+        }
         let mut upstreams = self
             .upstreams
             .find_ids(upstream_ids)
