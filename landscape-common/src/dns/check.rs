@@ -42,7 +42,7 @@ pub struct CheckChainDnsResult {
     /// Failure of this diagnostic lookup, independent of any cached answer.
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub error: Option<DnsCheckError>,
-    /// Actual upstream DNS RCODE. Absent when no DNS response was received.
+    /// DNS result code retained by the resolver. Absent on transport failure.
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub response_code: Option<u16>,
     /// Matched redirect rule id, if this query was answered by redirect logic.

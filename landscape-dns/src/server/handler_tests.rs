@@ -415,17 +415,17 @@ mod tests {
                 for (action, error, code) in [
                     (ScriptedAction::HoldOpen, Some(DnsCheckError::UpstreamTimeout), None),
                     (
-                        ScriptedAction::Code(ResponseCode::Refused),
+                        ScriptedAction::EmptyCode(ResponseCode::Refused),
                         Some(DnsCheckError::UpstreamResponse),
                         Some(5),
                     ),
                     (
-                        ScriptedAction::Code(ResponseCode::ServFail),
+                        ScriptedAction::EmptyCode(ResponseCode::ServFail),
                         Some(DnsCheckError::UpstreamResponse),
                         Some(2),
                     ),
-                    (ScriptedAction::Code(ResponseCode::NXDomain), None, Some(3)),
-                    (ScriptedAction::Code(ResponseCode::NoError), None, Some(0)),
+                    (ScriptedAction::EmptyCode(ResponseCode::NXDomain), None, Some(3)),
+                    (ScriptedAction::EmptyCode(ResponseCode::NoError), None, Some(0)),
                 ] {
                     let mut upstream = ScriptedDnsServer::spawn("127.0.0.1".parse().unwrap()).await;
                     for _ in 0..32 {
@@ -463,7 +463,7 @@ mod tests {
                     assert!(upstream.queries() > 0, "must send a real query");
                     assert_eq!(result.rule_id, Some(rule_id));
                     assert_eq!(result.error, error, "native={native}, action={action:?}");
-                    assert_eq!(result.response_code, code);
+                    assert_eq!(result.response_code, code, "native={native}, action={action:?}");
                     assert_eq!(result.cache_records.as_ref().unwrap().len(), 1);
                     if error.is_none() {
                         assert!(result.records.as_ref().unwrap().is_empty());
