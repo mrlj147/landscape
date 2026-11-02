@@ -69,11 +69,14 @@ pub(super) struct FailoverSelections {
 struct ActiveFailover {
     order: Vec<Uuid>,
     selected: Option<Uuid>,
+    selected_route: Option<WanRouteTarget>,
     generation: u64,
     selection_changed: bool,
     changed: std::time::Instant,
     unknown_since: HashMap<Uuid, std::time::Instant>,
     healthy_since: HashMap<Uuid, std::time::Instant>,
+    /// Exits that may still carry sessions after a keep-existing switch.
+    retained_routes: HashMap<Uuid, WanRouteTarget>,
     status: landscape_common::flow::failover::FlowWanStatus,
 }
 
@@ -118,11 +121,13 @@ impl FailoverSelections {
             let state = self.active.entry(key).or_insert_with(|| ActiveFailover {
                 order: order.clone(),
                 selected: None,
+                selected_route: None,
                 generation: now_ms().saturating_mul(1000),
                 selection_changed: false,
                 changed: now,
                 unknown_since: HashMap::new(),
                 healthy_since: HashMap::new(),
+                retained_routes: HashMap::new(),
                 status: FlowWanStatus {
                     flow_id: config.flow_id,
                     ipv6,
@@ -137,6 +142,7 @@ impl FailoverSelections {
                     router_policy_applied: None,
                     router_policy_error: None,
                     router_policy_checked_at_ms: None,
+                    router_policy_cleanup: false,
                 },
             });
             let reordered = state.order != order;
@@ -159,6 +165,34 @@ impl FailoverSelections {
             }
             state.unknown_since.retain(|id, _| order.contains(id));
             state.healthy_since.retain(|id, _| order.contains(id));
+            // A recovered primary only receives new connections. The old
+            // backup can therefore still carry sessions even while it is no
+            // longer the selected exit. Its later failure must honor the
+            // failure policy, too. A changed route invalidates cached gateway/
+            // ifindex data regardless of the keep-existing policy.
+            let reset_retained = state.retained_routes.iter().any(|(id, old)| {
+                let route = routes.get(&RouteOwner::Link(*id));
+                let unknown_expired = !config.failover.fail_open_on_unknown
+                    && state.unknown_since.get(id).is_some_and(|since| {
+                        now.duration_since(*since).as_secs()
+                            >= u64::from(config.failover.unknown_grace_secs)
+                    });
+                route.is_some_and(|route| route != old)
+                    || (config.failover.failure_connection_policy
+                        == landscape_common::flow::FlowConnectionPolicy::ResetExisting
+                        && (route.is_none()
+                            || verdict(id) == WanLinkHealthState::Unhealthy
+                            || unknown_expired))
+            });
+            if reset_retained {
+                state.generation = state.generation.wrapping_add(1);
+                state.retained_routes.clear();
+                tracing::info!(
+                    flow_id = config.flow_id,
+                    ipv6,
+                    "invalidated retained WAN connections after an old exit failed or changed"
+                );
+            }
             let best = order.iter().copied().find(healthy);
             let mut retry_after_secs = None;
             let (selected, reason) = if !config.failover.enable {
@@ -225,6 +259,7 @@ impl FailoverSelections {
             state.selection_changed = previous != selected;
             if reordered || (state.status.automatic && !config.failover.enable) {
                 state.generation = state.generation.wrapping_add(1);
+                state.retained_routes.clear();
             }
             if previous != selected {
                 let recovery = !reordered && previous.is_some_and(|id| healthy(&id));
@@ -237,6 +272,14 @@ impl FailoverSelections {
                 };
                 if policy == landscape_common::flow::FlowConnectionPolicy::ResetExisting {
                     state.generation = state.generation.wrapping_add(1);
+                    state.retained_routes.clear();
+                } else if let Some(id) = previous
+                    && let Some(route) = &state.selected_route
+                {
+                    state.retained_routes.insert(id, route.clone());
+                }
+                if let Some(id) = selected {
+                    state.retained_routes.remove(&id);
                 }
                 use landscape_common::flow::failover::WanSwitchCause as Cause;
                 let cause = if !config.failover.enable {
@@ -284,7 +327,15 @@ impl FailoverSelections {
                     "WAN failover exit changed"
                 );
             }
+            let selected_route = selected.and_then(|id| routes.get(&RouteOwner::Link(id))).cloned();
+            if !state.selection_changed && state.selected_route != selected_route {
+                // Invalidate before cloning the default-flow alias so owner
+                // and Flow 0 publish the new generation in the same update.
+                state.generation = state.generation.wrapping_add(1);
+                state.retained_routes.clear();
+            }
             state.selected = selected;
+            state.selected_route = selected_route;
             state.order = order.clone();
             state.status.automatic = config.failover.enable;
             state.status.active_link_id = selected;
@@ -404,12 +455,10 @@ impl IpRouteService {
             let route = if flow_id == 0 && selections.default_owner.is_none() {
                 routes.values().find(|r| r.info.default_route)
             } else {
-                selections
-                    .published
-                    .get(&(flow_id, ipv6))
-                    .filter(|targets| targets.len() == 1)
-                    .and_then(|targets| targets.first())
-                    .map(|(route, _)| route)
+                let targets = selections.published.get(&(flow_id, ipv6))?;
+                let mut effective = targets.iter().filter(|(_, weight)| *weight > 0);
+                let (route, _) = effective.next()?;
+                effective.all(|(other, _)| other == route).then_some(route)
             }?;
             let link_id = routes.iter().find_map(|(owner, current)| {
                 if current != route {
@@ -444,8 +493,8 @@ impl IpRouteService {
         let selections = self.failover_selections.lock().await;
         let mut statuses: Vec<_> = selections.active.values().map(|s| s.status.clone()).collect();
         let policy = self.router_wan_policy.read().await;
+        let applied = self.router_policy_applied.read().await;
         if policy.is_some() {
-            let applied = self.router_policy_applied.read().await;
             let current = applied.as_ref().filter(|s| s.policy == *policy);
             for status in &mut statuses {
                 if status.flow_id == 0 || Some(status.flow_id) == selections.default_owner {
@@ -453,6 +502,39 @@ impl IpRouteService {
                     status.router_policy_error = current.and_then(|s| s.error.clone());
                     status.router_policy_checked_at_ms = current.map(|s| s.checked_at_ms);
                 }
+            }
+        } else if let Some(applied) = applied.as_ref()
+            && (applied.policy.is_some() || applied.error.is_some())
+        {
+            // The owner may have been deleted or changed to weighted mode.
+            // Keep cleanup visible on the always-present default-flow card.
+            let current = applied.policy.is_none();
+            for ipv6 in [false, true] {
+                if !statuses.iter().any(|s| s.flow_id == 0 && s.ipv6 == ipv6) {
+                    statuses.push(landscape_common::flow::failover::FlowWanStatus {
+                        flow_id: 0,
+                        ipv6,
+                        automatic: false,
+                        active_link_id: None,
+                        active_iface_name: None,
+                        reason:
+                            landscape_common::flow::failover::WanSelectionReason::NoAvailableWan,
+                        selected_at_ms: applied.checked_at_ms,
+                        retry_after_secs: None,
+                        candidates: vec![],
+                        history: vec![],
+                        router_policy_applied: None,
+                        router_policy_error: None,
+                        router_policy_checked_at_ms: None,
+                        router_policy_cleanup: false,
+                    });
+                }
+            }
+            for status in statuses.iter_mut().filter(|s| s.flow_id == 0) {
+                status.router_policy_cleanup = true;
+                status.router_policy_applied = Some(false);
+                status.router_policy_error = current.then(|| applied.error.clone()).flatten();
+                status.router_policy_checked_at_ms = current.then_some(applied.checked_at_ms);
             }
         }
         statuses.sort_by_key(|s| (s.flow_id, s.ipv6));
@@ -525,17 +607,6 @@ impl IpRouteService {
         let ipv4_updates = selections.changed_targets(ipv4_result.clone(), false);
         let ipv6_updates = selections.changed_targets(ipv6_result.clone(), true);
         let changed = !ipv4_updates.is_empty() || !ipv6_updates.is_empty();
-        // A reconnect/address change of the same WAN must not preserve stale
-        // ifindex/gateway data, even though the link UUID did not change.
-        for (ipv6, updates) in [(false, &ipv4_updates), (true, &ipv6_updates)] {
-            for id in updates.keys() {
-                if let Some(state) = selections.active.get_mut(&(*id, ipv6))
-                    && !state.selection_changed
-                {
-                    state.generation = state.generation.wrapping_add(1);
-                }
-            }
-        }
         if changed {
             warn_fully_unresolved_flows(flow_configs, &ipv4_result, &ipv6_result);
         }
@@ -683,13 +754,235 @@ mod failover_tests {
         );
         config.failover.bind_router_traffic = false;
         service.sync_flow_wan_targets(&[config]).await;
-        assert!(
-            service
-                .get_flow_wan_statuses()
-                .await
-                .iter()
-                .all(|s| s.router_policy_applied.is_none() && s.router_policy_error.is_none())
-        );
+        let cleanup = service.get_flow_wan_statuses().await;
+        assert!(cleanup.iter().filter(|s| s.flow_id == 0).all(|s| s.router_policy_cleanup
+            && s.router_policy_applied == Some(false)
+            && s.router_policy_error.is_none()));
+        *service.router_policy_applied.write().await = Some(super::super::RouterPolicyApplyState {
+            policy: None,
+            error: Some("-6: cannot remove old policy".into()),
+            checked_at_ms: 456,
+        });
+        service.clear_flow_wan_targets(9).await;
+        service.sync_flow_wan_targets(&[]).await;
+        let failed_cleanup = service.get_flow_wan_statuses().await;
+        assert_eq!(failed_cleanup.len(), 2, "deleted owner must not hide failed cleanup");
+        assert!(failed_cleanup.iter().all(|s| s.flow_id == 0
+            && s.router_policy_cleanup
+            && s.router_policy_error.as_deref() == Some("-6: cannot remove old policy")
+            && s.router_policy_checked_at_ms == Some(456)));
+        service.reconcile_router_wan_policy().await;
+        assert!(service.get_flow_wan_statuses().await.is_empty());
+    }
+
+    #[test]
+    fn retained_backup_failure_honors_policy_and_route_changes_in_both_families() {
+        use landscape_common::flow::FlowConnectionPolicy;
+        for ipv6 in [false, true] {
+            for policy in
+                [FlowConnectionPolicy::ResetExisting, FlowConnectionPolicy::NewConnectionsOnly]
+            {
+                for disruption in ["health", "removed", "changed"] {
+                    let (mut config, mut routes, mut health, primary, backup) = setup();
+                    config.failover.failure_connection_policy = policy;
+                    let mut state = FailoverSelections::default();
+                    let now = std::time::Instant::now();
+                    let resolve = |state: &mut FailoverSelections,
+                                   routes: &WanRoutesByOwner,
+                                   health: &LinkHealths,
+                                   secs| {
+                        state.resolve_at(
+                            std::slice::from_ref(&config),
+                            routes,
+                            health,
+                            ipv6,
+                            now + std::time::Duration::from_secs(secs),
+                        );
+                    };
+                    resolve(&mut state, &routes, &health, 0);
+                    health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unhealthy;
+                    resolve(&mut state, &routes, &health, 1);
+                    health.get_mut(&primary).unwrap().state = WanLinkHealthState::Healthy;
+                    resolve(&mut state, &routes, &health, 2);
+                    let generation = state.active[&(9, ipv6)].generation;
+                    assert!(state.active[&(9, ipv6)].retained_routes.contains_key(&backup));
+                    match disruption {
+                        "health" => {
+                            health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unhealthy
+                        }
+                        "removed" => {
+                            routes.remove(&RouteOwner::Link(backup));
+                        }
+                        _ => routes.get_mut(&RouteOwner::Link(backup)).unwrap().info.ifindex += 10,
+                    }
+                    resolve(&mut state, &routes, &health, 3);
+                    let after = &state.active[&(9, ipv6)];
+                    assert_eq!(after.selected, Some(primary));
+                    let reset =
+                        policy == FlowConnectionPolicy::ResetExisting || disruption == "changed";
+                    assert_eq!(
+                        after.generation != generation,
+                        reset,
+                        "{ipv6} {policy:?} {disruption}"
+                    );
+                    let final_generation = after.generation;
+                    resolve(&mut state, &routes, &health, 4);
+                    assert_eq!(
+                        state.active[&(9, ipv6)].generation,
+                        final_generation,
+                        "one reset per event"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_unknown_respects_grace_fail_open_and_explicit_keep_policy() {
+        use landscape_common::flow::FlowConnectionPolicy;
+        for fail_open in [false, true] {
+            for policy in
+                [FlowConnectionPolicy::ResetExisting, FlowConnectionPolicy::NewConnectionsOnly]
+            {
+                let (mut config, routes, mut health, primary, backup) = setup();
+                config.failover.unknown_grace_secs = 5;
+                config.failover.fail_open_on_unknown = fail_open;
+                config.failover.failure_connection_policy = policy;
+                let mut state = FailoverSelections::default();
+                let now = std::time::Instant::now();
+                let resolve = |state: &mut FailoverSelections, health: &LinkHealths, secs| {
+                    state.resolve_at(
+                        std::slice::from_ref(&config),
+                        &routes,
+                        health,
+                        false,
+                        now + std::time::Duration::from_secs(secs),
+                    );
+                    state.active[&(9, false)].generation
+                };
+                resolve(&mut state, &health, 0);
+                health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unhealthy;
+                resolve(&mut state, &health, 1);
+                health.get_mut(&primary).unwrap().state = WanLinkHealthState::Healthy;
+                let generation = resolve(&mut state, &health, 2);
+                health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unknown;
+                assert_eq!(resolve(&mut state, &health, 3), generation);
+                assert_eq!(resolve(&mut state, &health, 7), generation);
+                let reset = policy == FlowConnectionPolicy::ResetExisting && !fail_open;
+                assert_eq!(resolve(&mut state, &health, 8) != generation, reset);
+                assert_eq!(state.active[&(9, false)].selected, Some(primary));
+            }
+        }
+    }
+
+    #[test]
+    fn unused_backup_failure_does_not_reset_active_connections() {
+        let (config, routes, mut health, _, backup) = setup();
+        let mut state = FailoverSelections::default();
+        selected(&mut state, &config, &routes, &health);
+        let generation = state.active[&(9, false)].generation;
+        health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unhealthy;
+        selected(&mut state, &config, &routes, &health);
+        assert_eq!(state.active[&(9, false)].generation, generation);
+    }
+
+    #[test]
+    fn kept_connection_to_removed_wan_is_invalidated_on_changed_reappearance() {
+        let (mut config, mut routes, mut health, primary, _) = setup();
+        config.failover.failure_connection_policy =
+            landscape_common::flow::FlowConnectionPolicy::NewConnectionsOnly;
+        let mut state = FailoverSelections::default();
+        selected(&mut state, &config, &routes, &health);
+        let mut original = routes.remove(&RouteOwner::Link(primary)).unwrap();
+        selected(&mut state, &config, &routes, &health);
+        assert!(state.active[&(9, false)].retained_routes.contains_key(&primary));
+        let generation = state.active[&(9, false)].generation;
+        original.info.ifindex += 10;
+        routes.insert(RouteOwner::Link(primary), original);
+        health.get_mut(&primary).unwrap().state = WanLinkHealthState::Unhealthy;
+        selected(&mut state, &config, &routes, &health);
+        assert_ne!(state.active[&(9, false)].generation, generation);
+    }
+
+    #[tokio::test]
+    async fn retained_backup_failure_resets_default_alias_without_changing_active_exit() {
+        let (mut config, routes, mut health, primary, backup) = setup();
+        config.failover.bind_default_flow = true;
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route).await;
+        }
+        for info in health.values() {
+            service.update_link_health(info.clone()).await;
+        }
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        for verdict in [WanLinkHealthState::Unhealthy, WanLinkHealthState::Healthy] {
+            health.get_mut(&primary).unwrap().state = verdict;
+            service.update_link_health(health[&primary].clone()).await;
+            service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        }
+        let generations = {
+            let state = service.failover_selections.lock().await;
+            (
+                state.active[&(9, false)].generation,
+                state.active[&(0, false)].generation,
+                state.active[&(0, true)].generation,
+            )
+        };
+        health.get_mut(&backup).unwrap().state = WanLinkHealthState::Unhealthy;
+        service.update_link_health(health[&backup].clone()).await;
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        let state = service.failover_selections.lock().await;
+        assert_eq!(state.active[&(9, false)].selected, Some(primary));
+        assert_eq!(state.active[&(0, false)].selected, Some(primary));
+        assert_ne!(state.active[&(9, false)].generation, generations.0);
+        assert_ne!(state.active[&(0, false)].generation, generations.1);
+        assert_eq!(state.active[&(0, true)].generation, generations.2);
+    }
+
+    #[tokio::test]
+    async fn selected_route_change_invalidates_owner_and_default_alias_once() {
+        let (mut config, routes, health, primary, _) = setup();
+        config.failover.bind_default_flow = true;
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route).await;
+        }
+        for info in health.into_values() {
+            service.update_link_health(info).await;
+        }
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        let generations = {
+            let state = service.failover_selections.lock().await;
+            (state.active[&(9, false)].generation, state.active[&(0, false)].generation)
+        };
+        let mut route = service.clone_ipv4_wan_infos().await[&RouteOwner::Link(primary)].clone();
+        route.info.ifindex += 10;
+        service.insert_ipv4_wan_route(&RouteOwner::Link(primary), route).await;
+        for _ in 0..2 {
+            service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+            let state = service.failover_selections.lock().await;
+            assert_eq!(state.active[&(9, false)].generation, generations.0 + 1);
+            assert_eq!(state.active[&(0, false)].generation, generations.1 + 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn weighted_dns_binding_uses_only_distinct_positive_weight_targets() {
+        let (mut config, routes, _, primary, _) = setup();
+        config.failover = Default::default();
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route).await;
+        }
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        assert!(service.dns_wan_binding(9).await.ipv4.is_none());
+        config.flow_targets[1].weight = 0;
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        assert_eq!(service.dns_wan_binding(9).await.ipv4_link_id, Some(primary));
+        config.flow_targets.push(config.flow_targets[0].clone());
+        service.sync_flow_wan_targets(std::slice::from_ref(&config)).await;
+        assert_eq!(service.dns_wan_binding(9).await.ipv4_link_id, Some(primary));
     }
 
     fn setup() -> (FlowConfig, WanRoutesByOwner, LinkHealths, Uuid, Uuid) {

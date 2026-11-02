@@ -29,6 +29,144 @@ impl FlowConfigRepository {
         Self { db }
     }
 
+    async fn check_wan_dns_transaction(
+        &self,
+        txn: &sea_orm::DatabaseTransaction,
+        changes: &[FlowConfig],
+    ) -> Result<(), crate::writer::UpsertErr> {
+        use crate::{
+            dns_upstream::entity::DnsUpstreamConfigEntity, wan_link::entity::WanLinkConfigEntity,
+            writer::UpsertErr,
+        };
+        use landscape_common::{
+            dns::{config::DnsUpstreamConfig, rule::DNSRuleConfig},
+            service::ServiceConfigError,
+            wan_link::WanLinkConfig,
+        };
+        let invalid = |error| UpsertErr::Database(DbError::Validation(error));
+        let previous: Vec<_> =
+            FlowConfigEntity::find().all(txn).await?.into_iter().map(FlowConfig::from).collect();
+        let mut flows = previous.clone();
+        for change in changes {
+            flows.retain(|flow| flow.id != change.id);
+            flows.push(change.clone());
+        }
+        if flows.iter().filter(|flow| flow.enable && flow.failover.bind_default_flow).count() > 1 {
+            return Err(invalid(ServiceConfigError::InvalidConfig {
+                reason: "only one enabled flow may control the default WAN policy".into(),
+            }));
+        }
+        let rules: Vec<_> = DNSRuleConfigEntity::find()
+            .all(txn)
+            .await?
+            .into_iter()
+            .map(DNSRuleConfig::from)
+            .collect();
+        let upstreams: Vec<_> = DnsUpstreamConfigEntity::find()
+            .all(txn)
+            .await?
+            .into_iter()
+            .map(DnsUpstreamConfig::from)
+            .collect();
+        let links: Vec<_> = WanLinkConfigEntity::find()
+            .all(txn)
+            .await?
+            .into_iter()
+            .map(WanLinkConfig::from)
+            .collect();
+        for change in changes {
+            if let Some(old) = previous.iter().find(|flow| flow.id == change.id) {
+                if change.flow_id != old.flow_id {
+                    Self::ensure_no_rule_references(txn, old.flow_id, false).await?;
+                }
+                if (!change.enable
+                    || !change.failover.ordered_targets()
+                    || change.flow_id != old.flow_id)
+                    && upstreams
+                        .iter()
+                        .any(|upstream| upstream.bind_config.follow_flow == Some(old.flow_id))
+                {
+                    return Err(invalid(ServiceConfigError::InvalidConfig { reason: "change DNS upstream WAN bindings before disabling, renumbering or leaving primary/backup mode on their followed flow".into() }));
+                }
+                for rule in rules.iter().filter(|rule| {
+                    rule.enable && rule.flow_id == old.flow_id && !rule.wan_upstreams.is_empty()
+                }) {
+                    if change.flow_id != old.flow_id {
+                        return Err(invalid(ServiceConfigError::WanDnsFlowUnsupported {
+                            flow_id: old.flow_id,
+                        }));
+                    }
+                    crate::dns_wan_validation::validate_rule_wan_flow(rule, &flows)
+                        .map_err(invalid)?;
+                }
+            }
+            for target in &change.flow_targets {
+                if let FlowTarget::Interface { link_id, .. } = target.target {
+                    let Some(link) = links.iter().find(|link| link.id == link_id) else {
+                        return Err(invalid(ServiceConfigError::InvalidConfig {
+                            reason: format!("flow target references unknown wan link {link_id}"),
+                        }));
+                    };
+                    if change.enable && change.failover.enable {
+                        link.validate_failover_health().map_err(invalid)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_no_rule_references(
+        txn: &sea_orm::DatabaseTransaction,
+        flow_id: FlowId,
+        deleting: bool,
+    ) -> Result<(), crate::writer::UpsertErr> {
+        use landscape_common::{
+            dns::rule::DNSRuleConfig, flow::ip_mark::WanIpRuleConfig, service::ServiceConfigError,
+        };
+        let mut references = Vec::new();
+        for rule in DNSRuleConfigEntity::find().all(txn).await?.into_iter().map(DNSRuleConfig::from)
+        {
+            // Delete cascades the owner's rules. Renumbering does not, so it
+            // must also reject rules that would be stranded on the old ID.
+            if deleting && rule.flow_id == flow_id {
+                continue;
+            }
+            if (!deleting && rule.flow_id == flow_id)
+                || rule.mark.redirect_flow_id() == Some(flow_id)
+            {
+                references.push(format!(
+                    "分流 {} 的 DNS 规则“{}” ({})",
+                    rule.flow_id, rule.name, rule.id
+                ));
+            }
+        }
+        for rule in
+            DstIpRuleConfigEntity::find().all(txn).await?.into_iter().map(WanIpRuleConfig::from)
+        {
+            if deleting && rule.flow_id == flow_id {
+                continue;
+            }
+            if (!deleting && rule.flow_id == flow_id)
+                || rule.mark.redirect_flow_id() == Some(flow_id)
+            {
+                references.push(format!(
+                    "分流 {} 的 IP 规则“{}” ({})",
+                    rule.flow_id,
+                    rule.name.as_deref().unwrap_or(&rule.remark),
+                    rule.id
+                ));
+            }
+        }
+        references.sort();
+        if !references.is_empty() {
+            return Err(crate::writer::UpsertErr::Database(DbError::Validation(
+                ServiceConfigError::FlowReferenced { flow_id, references: references.join("、") },
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn list_runtime_configs(&self) -> Result<Vec<RuntimeFlowConfig>, DbError> {
         let configs = self.list().await?;
         let devices = self.load_devices_for_configs(&configs).await?;
@@ -93,6 +231,8 @@ impl FlowConfigRepository {
                     },
                 )));
             }
+
+            Self::ensure_no_rule_references(txn, flow_id, true).await?;
 
             DNSRuleConfigEntity::delete_many()
                 .filter(DNSRuleConfigColumn::FlowId.eq(flow_id))
@@ -422,7 +562,8 @@ crate::impl_repository!(
     FlowConfigEntity,
     FlowConfigActiveModel,
     FlowConfig,
-    DBId
+    DBId,
+    transactional_check = check_wan_dns_transaction
 );
 
 crate::impl_flow_store!(FlowConfigRepository, FlowConfigModel, FlowConfigEntity);
@@ -467,6 +608,34 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             }
         }
 
+        if let Some(previous) = self
+            .find_by_id(config.id)
+            .await
+            .map_err(landscape_common::service::ServiceConfigError::internal)?
+            && (previous.flow_id != config.flow_id
+                || !crate::dns_wan_validation::supports_wan_dns(config))
+        {
+            let rules = crate::dns_rule::repository::DNSRuleRepository::new(self.db.clone())
+                .list()
+                .await
+                .map_err(landscape_common::service::ServiceConfigError::internal)?;
+            let mut references: Vec<_> = rules
+                .iter()
+                .filter(|rule| {
+                    rule.enable
+                        && rule.flow_id == previous.flow_id
+                        && !rule.wan_upstreams.is_empty()
+                })
+                .map(|rule| format!("“{}” ({})", rule.name, rule.id))
+                .collect();
+            references.sort();
+            if !references.is_empty() {
+                return Err(landscape_common::service::ServiceConfigError::WanDnsFlowUnsupported {
+                    flow_id: previous.flow_id,
+                });
+            }
+        }
+
         if config.enable && config.failover.bind_default_flow {
             let configs = self
                 .list()
@@ -501,7 +670,7 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             }
         }
 
-        if config.failover.enable {
+        if config.enable && config.failover.enable {
             let store = crate::wan_link::repository::WanLinkRepository::new(self.db.clone());
             for target in &config.flow_targets {
                 if let FlowTarget::Interface { link_id, .. } = target.target {
@@ -704,6 +873,7 @@ mod wan_link_ref_tests {
         flow.failover.enable = true;
         provider.flow_rule_store().upsert(flow.clone()).await.unwrap();
         let mut wan = provider.wan_link_store().find_by_id(link_id).await.unwrap().unwrap();
+        wan.v4.enable = true;
         wan.health_check.enable = false;
         let error = provider.wan_link_store().validate_cross(&mut wan).await.unwrap_err();
         assert!(error.to_string().contains("health"));

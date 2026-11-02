@@ -121,6 +121,10 @@ impl RuntimeWanLinkConfig {
             health_check: RuntimeWanLinkHealthCheckConfig::from_config(
                 &config.health_check,
                 config.link_chain_id,
+                config.v4.enable,
+                // The legacy Static.ipv6 field does not start an IPv6 section.
+                // Only PD enables IPv6 runtime monitoring on this WAN.
+                config.pd.enable,
             ),
         }
     }
@@ -198,6 +202,8 @@ pub struct RuntimeWanLinkMssConfig {
 pub struct RuntimeWanLinkHealthCheckConfig {
     pub socket_mark: u32,
     pub enable: bool,
+    pub ipv4_enabled: bool,
+    pub ipv6_enabled: bool,
     pub ipv4_probe_enabled: bool,
     pub ipv6_probe_enabled: bool,
     pub probe: RuntimeWanHealthProbe,
@@ -233,7 +239,12 @@ pub enum RuntimeWanHealthProbe {
 }
 
 impl RuntimeWanLinkHealthCheckConfig {
-    fn from_config(config: &WanLinkHealthCheckConfig, chain_id: u16) -> Self {
+    fn from_config(
+        config: &WanLinkHealthCheckConfig,
+        chain_id: u16,
+        ipv4_enabled: bool,
+        ipv6_enabled: bool,
+    ) -> Self {
         let probe = match &config.probe {
             WanHealthProbeConfig::Multi { groups } => {
                 RuntimeWanHealthProbe::Multi { groups: groups.clone() }
@@ -261,6 +272,8 @@ impl RuntimeWanLinkHealthCheckConfig {
                 0,
             )),
             enable: config.enable,
+            ipv4_enabled,
+            ipv6_enabled,
             ipv4_probe_enabled: config.ipv4_probe_enabled,
             ipv6_probe_enabled: config.ipv6_probe_enabled,
             probe,
@@ -336,6 +349,32 @@ mod tests {
                 probe_gateway: true
             }
         );
+    }
+
+    #[test]
+    fn runtime_health_families_follow_active_sections_not_legacy_static_ipv6() {
+        let mut config: WanLinkConfig = serde_json::from_value(json!({
+            "attach_iface_name": "eth0",
+            "v4": {
+                "enable": true,
+                "model": {
+                    "t": "static", "ipv4": "192.0.2.2", "ipv4_mask": 24,
+                    "ipv6": "2001:db8::2"
+                }
+            }
+        }))
+        .unwrap();
+        let health = RuntimeWanLinkConfig::from_config(&config).health_check;
+        assert!(health.ipv4_enabled);
+        assert!(!health.ipv6_enabled, "legacy Static.ipv6 does not run an IPv6 section");
+
+        config.pd.enable = true;
+        assert!(RuntimeWanLinkConfig::from_config(&config).health_check.ipv6_enabled);
+
+        config.pd.enable = false;
+        config.v4.enable = false;
+        let health = RuntimeWanLinkConfig::from_config(&config).health_check;
+        assert!(!health.ipv4_enabled && !health.ipv6_enabled);
     }
 
     #[test]

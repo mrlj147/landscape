@@ -7,8 +7,7 @@ use landscape_common::{
     service::{ServiceHandle, ServiceStatus},
     wan_link::{
         HealthCheckRuntime, HealthEvaluator, HealthProbeStatus, LinkStateHandle,
-        RuntimeWanLinkHealthCheckConfig, SessionIface, TargetProbe, WanLinkHealthState,
-        WanProbeGroup, WanProbeTarget, swap_if_changed,
+        RuntimeWanLinkHealthCheckConfig, SessionIface, TargetProbe, WanProbeGroup, swap_if_changed,
     },
 };
 use std::{net::IpAddr, sync::Arc, time::Duration};
@@ -82,23 +81,8 @@ async fn round(
     let timeout = Duration::from_millis(cfg.timeout_ms.into());
     let results = join_all(groups.iter().map(|group| async move {
         let results = join_all(group.targets.iter().map(|target| async move {
-            let result = match (target, src) {
-                (WanProbeTarget::Icmp { address: IpAddr::V4(ip) }, IpAddr::V4(src)) => {
-                    probe
-                        .ping_v4_marked(&iface.iface_name, src, *ip, timeout, cfg.socket_mark)
-                        .await
-                }
-                _ => {
-                    super::application_probe::probe_target(
-                        &iface.iface_name,
-                        src,
-                        target,
-                        timeout,
-                        cfg.socket_mark,
-                    )
-                    .await
-                }
-            };
+            let result =
+                probe.probe_target(&iface.iface_name, src, target, timeout, cfg.socket_mark).await;
             (target.address(), result)
         }))
         .await;
@@ -183,22 +167,14 @@ pub(super) async fn run(
         };
         tokio::select! { _ = stop.cancelled() => break, _ = rounds => {}, _ = state_changes.changed() => { ticker.reset_immediately(); continue; } }
         super::health_check::sync_followed_family(&routes, link_id, &cfg).await;
-        let summary = if cfg.ipv4_probe_enabled && source4.is_some() {
-            v4.evaluator.info()
-        } else {
-            v6.evaluator.info()
-        };
         swap_if_changed(
             &runtime,
-            HealthCheckRuntime::Running {
-                state: if source4.is_none() && source6.is_none() {
-                    WanLinkHealthState::Unknown
-                } else {
-                    summary.state
-                },
-                rtt_ewma_ms: summary.rtt_ewma_ms,
-                probes: v4.probes.iter().chain(v6.probes.iter()).cloned().collect(),
-            },
+            super::health_check::runtime_snapshot(
+                &cfg,
+                Some(v4.evaluator.info()),
+                Some(v6.evaluator.info()),
+                v4.probes.iter().chain(v6.probes.iter()).cloned().collect(),
+            ),
         );
     }
     routes.clear_link_health(link_id).await;
@@ -209,6 +185,7 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use landscape_common::wan_link::WanProbeTarget;
     #[tokio::test]
     async fn disabled_families_do_not_attempt_any_targets() {
         use super::super::probe::FakeProbe;

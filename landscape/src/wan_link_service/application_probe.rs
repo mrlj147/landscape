@@ -3,6 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
+use futures::{StreamExt, stream};
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType};
 use landscape_common::wan_link::{RuntimeWanHealthProbe, WanProbeTarget};
@@ -58,15 +59,14 @@ pub(super) async fn probe_target(
                 let port = url
                     .port_or_known_default()
                     .ok_or_else(|| ProbeError::Config("unsupported HTTP scheme".into()))?;
-                for address in addresses {
-                    if address.is_ipv6() != src.is_ipv6() {
-                        continue;
-                    }
-                    if http_request(dev, src, SocketAddr::new(address, port), &url, mark).await? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
+                let addresses = addresses
+                    .into_iter()
+                    .filter(|address| address.is_ipv6() == src.is_ipv6())
+                    .collect();
+                try_http_addresses(addresses, timeout.saturating_sub(start.elapsed()), |address| {
+                    http_request(dev, src, SocketAddr::new(address, port), &url, mark)
+                })
+                .await
             }
             WanProbeTarget::Icmp { address } => {
                 Ok(super::probe::ping_ip(dev, src, *address, timeout, mark).await?.is_some())
@@ -78,6 +78,37 @@ pub(super) async fn probe_target(
         Ok(Ok(false)) | Err(_) => Ok(None),
         Ok(Err(error)) => Err(error),
     }
+}
+
+/// Bound concurrency and reserve time for every address, including those
+/// queued behind a blackholed first batch. A successful address wins at once.
+async fn try_http_addresses<F, Fut>(
+    addresses: Vec<IpAddr>,
+    budget: Duration,
+    request: F,
+) -> Result<bool, ProbeError>
+where
+    F: Fn(IpAddr) -> Fut,
+    Fut: std::future::Future<Output = Result<bool, ProbeError>>,
+{
+    const CONCURRENCY: usize = 4;
+    if addresses.is_empty() || budget.is_zero() {
+        return Ok(false);
+    }
+    let batches = addresses.len().div_ceil(CONCURRENCY) as u32;
+    let address_budget = budget / batches;
+    let mut requests = stream::iter(addresses)
+        .map(|address| tokio::time::timeout(address_budget, request(address)))
+        .buffer_unordered(CONCURRENCY);
+    let mut local_error = None;
+    while let Some(result) = requests.next().await {
+        match result {
+            Ok(Ok(true)) => return Ok(true),
+            Ok(Err(error)) => local_error = Some(error),
+            Ok(Ok(false)) | Err(_) => {}
+        }
+    }
+    if let Some(error) = local_error { Err(error) } else { Ok(false) }
 }
 
 async fn resolve(
@@ -228,6 +259,63 @@ fn matches_query(request: &Message, reply: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn http_addresses_try_healthy_peer_behind_a_blackholed_first_batch() {
+        use std::sync::{Arc, Mutex};
+        let addresses: Vec<IpAddr> = (1..=5).map(|n| Ipv4Addr::new(192, 0, 2, n).into()).collect();
+        let healthy = addresses[4];
+        let attempted = Arc::new(Mutex::new(vec![]));
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let result = try_http_addresses(addresses, Duration::from_secs(2), |address| {
+            let attempted = attempted.clone();
+            let active = active.clone();
+            let max_active = max_active.clone();
+            async move {
+                attempted.lock().unwrap().push(address);
+                let count = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let _guard = ActiveGuard(active);
+                max_active.fetch_max(count, std::sync::atomic::Ordering::SeqCst);
+                if address == healthy {
+                    Ok(true)
+                } else {
+                    std::future::pending::<Result<bool, ProbeError>>().await
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(result);
+        assert!(attempted.lock().unwrap().contains(&healthy));
+        assert!(max_active.load(std::sync::atomic::Ordering::SeqCst) <= 4);
+        assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn http_addresses_preserve_local_errors_unless_an_address_succeeds() {
+        let addresses = vec!["192.0.2.1".parse().unwrap(), "192.0.2.2".parse().unwrap()];
+        let result = try_http_addresses(addresses.clone(), Duration::from_secs(1), |_| async {
+            Err(ProbeError::Config("local setup error".into()))
+        })
+        .await;
+        assert!(matches!(result, Err(ProbeError::Config(_))));
+        let result = try_http_addresses(addresses, Duration::from_secs(1), |address| async move {
+            if address == "192.0.2.1".parse::<IpAddr>().unwrap() {
+                Err(ProbeError::Config("local setup error".into()))
+            } else {
+                Ok(true)
+            }
+        })
+        .await;
+        assert!(result.unwrap());
+    }
 
     #[tokio::test]
     async fn http_probe_preserves_local_socket_errors() {

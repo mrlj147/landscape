@@ -2,7 +2,7 @@ name: WAN failover tests
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/multi-wan-failover']
+    branches: ['codex/multi-wan-failover', 'codex/multi-wan-failover-history-20261103']
   pull_request:
     paths:
       - 'Cargo.toml'
@@ -20,9 +20,13 @@ on:
       - 'scripts/package_lkit.py'
       - 'landscape-common/src/flow/**'
       - 'landscape-common/src/wan_link/**'
+      - 'landscape-common/src/service/**'
       - 'landscape-core/src/route/**'
       - 'landscape/src/flow/**'
       - 'landscape/src/wan_link_service/**'
+      - 'landscape/src/wan_service/**'
+      - 'landscape-webserver/src/services/wan_link.rs'
+      - 'landscape-webserver/src/system/config.rs'
       - 'landscape-webui/src/components/flow/**'
       - 'landscape-webui/src/components/health_check/**'
       - '.github/workflows/wan-failover.yml'
@@ -50,6 +54,7 @@ jobs:
           grep 'test result:' "$RUNNER_TEMP/wan-state.log"
       - run: |
           cargo test --locked -p landscape --lib wan_link_service::
+          cargo test --locked -p landscape --lib wan_service::
           cargo test --locked -p landscape --lib flow::rule_service::tests::
       - name: Compile privileged health and DNS socket tests
         run: cargo test --locked -p landscape -p landscape-dns --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-service-build.json"

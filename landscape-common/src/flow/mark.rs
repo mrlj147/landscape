@@ -92,6 +92,12 @@ impl FlowMark {
         FlowMark { action, allow_reuse_port, flow_id }
     }
 
+    /// Only Redirect references another flow; stray IDs on other actions do
+    /// not affect routing and must not acquire reference constraints.
+    pub fn redirect_flow_id(&self) -> Option<u32> {
+        matches!(self.action, FlowMarkAction::Redirect).then_some(u32::from(self.flow_id))
+    }
+
     /// Whether a DNS answer carrying this mark should be registered with the
     /// datapath. `KeepGoing` flows only register when reuse-port is allowed;
     /// the addressed action types (Direct/Drop/Redirect) always register.
@@ -220,6 +226,15 @@ impl From<FlowMarkAction> for u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_redirect_actions_reference_a_flow() {
+        for action in [FlowMarkAction::KeepGoing, FlowMarkAction::Direct, FlowMarkAction::Drop] {
+            assert_eq!(FlowMark::new(action, 42, true).redirect_flow_id(), None);
+        }
+        assert_eq!(FlowMark::new(FlowMarkAction::Redirect, 0, false).redirect_flow_id(), Some(0));
+        assert_eq!(FlowMark::new(FlowMarkAction::Redirect, 42, true).redirect_flow_id(), Some(42));
+    }
 
     #[test]
     fn test_from_u16() {

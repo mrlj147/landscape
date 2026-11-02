@@ -86,6 +86,11 @@ async fn reconcile_family(
                 number(&rule["table"]) == Some(42700)
             };
             if number(&rule["protocol"]) != Some(242) || rule["iif"] != "lo" || !table_ok {
+                if !enabled {
+                    // Cleanup only removes our tagged rules. Another policy
+                    // at the same priority must not strand our remaining rules.
+                    continue;
+                }
                 return Err(format!(
                     "routing rule priority {priority} is already owned by another policy"
                 ));
@@ -101,8 +106,16 @@ async fn reconcile_family(
         if present[0] {
             apply(rule_args(family, "del", true)).await?;
         }
-        if present.iter().any(|p| *p) {
-            apply(strings(&[family, "route", "flush", "table", TABLE, "proto", PROTOCOL])).await?;
+        // Rules may have been removed independently (for example by an
+        // administrator). Their absence does not prove the owned routes are
+        // gone. Always clean our protocol, preserving other users of the table.
+        let flushed =
+            command(&strings(&[family, "route", "flush", "table", TABLE, "proto", PROTOCOL]))
+                .await?;
+        if !flushed.status.success()
+            && !String::from_utf8_lossy(&flushed.stderr).contains("FIB table does not exist")
+        {
+            return Err(String::from_utf8_lossy(&flushed.stderr).into());
         }
         return Ok(());
     }
@@ -128,13 +141,14 @@ async fn reconcile_family(
 }
 
 pub async fn sync_router_wan_policy(policy: Option<&RouterWanPolicy>) -> Result<(), String> {
+    let mut errors = Vec::new();
     for (family, target) in
         [("-4", policy.and_then(|p| p.ipv4.as_ref())), ("-6", policy.and_then(|p| p.ipv6.as_ref()))]
     {
         if let Err(error) = reconcile_family(family, policy.is_some(), target).await {
             tracing::error!(family, %error, "failed to reconcile router WAN binding");
-            return Err(format!("{family}: {error}"));
+            errors.push(format!("{family}: {error}"));
         }
     }
-    Ok(())
+    if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
 }

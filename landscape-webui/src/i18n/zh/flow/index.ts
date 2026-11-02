@@ -34,6 +34,9 @@ export default {
     router_applied: "路由器策略已应用",
     router_failed: "路由器策略应用失败，正在重试",
     router_pending: "路由器策略等待应用",
+    router_cleanup_pending: "路由器出口策略撤销中，等待恢复原路由",
+    router_cleanup_failed:
+      "路由器出口策略撤销失败，正在重试；旧出口规则可能仍生效",
     connection_limits:
       "连接保持按 TCP/UDP 五元组判断：TCP 空闲 2 小时、UDP 空闲 120 秒后过期；重启或缓存淘汰也会丢失绑定。重新选择出口不发送 TCP RST，也不清空 NAT，应用可能需要重连。",
     failed_connection_warning:

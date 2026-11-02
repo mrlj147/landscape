@@ -79,11 +79,11 @@ export default {
     wan_servers_invalid:
       "Choose each WAN only once and enter at least one valid DNS IP for every group.",
 
-    follow_flow: "Follow WAN selection",
+    follow_flow: "Follow one specified flow",
     follow_flow_off: "Existing routing / fixed source address",
     default_flow: "Default Flow (0)",
     follow_flow_hint:
-      "Bind upstream sockets to the selected flow's WAN address and device, rebuilding connections on changes. Unavailable address families fail without falling back to another exit.",
+      "Every rule using this upstream follows the flow selected here, binding sockets to its WAN address and device and rebuilding connections on changes. It does not follow each rule's owning flow. For separate carrier DNS selection per flow, enable 'Select independent DNS groups by WAN' in each DNS rule. Unavailable address families fail without falling back to another exit.",
 
     title: "DNS Upstream Config",
     copy: "Copy",

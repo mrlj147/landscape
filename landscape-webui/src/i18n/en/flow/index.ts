@@ -35,6 +35,10 @@ export default {
     router_applied: "Host routing policy applied",
     router_failed: "Host routing policy failed; retrying",
     router_pending: "Host routing policy awaiting application",
+    router_cleanup_pending:
+      "Removing host routing policy; awaiting original routing",
+    router_cleanup_failed:
+      "Host routing policy removal failed; retrying. Old rules may still apply",
     connection_limits:
       "TCP/UDP exits follow the five-tuple, expiring after 2 hours of TCP idle time or 120 seconds of UDP idle time. Restart or cache eviction also drops bindings. Reselection sends no TCP RST and does not clear NAT; applications may need to reconnect.",
     failed_connection_warning:

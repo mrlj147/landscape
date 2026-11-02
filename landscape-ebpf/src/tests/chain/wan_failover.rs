@@ -286,6 +286,22 @@ fn real_traffic(ipv6: bool) {
         dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 5
     });
     drop(links);
+    // Recovery kept the old UDP connection on WAN2. A later failure of that
+    // retained exit must reset it even though the selected WAN remains WAN1.
+    runtime.block_on(async {
+        health(&routes, b, false, ipv6).await;
+        routes.sync_flow_wan_targets(&[config.clone()]).await;
+    });
+    let links = attach_dummies();
+    send(10002, true);
+    wait_for(
+        "retained backup failure moves old UDP to healthy primary",
+        Duration::from_secs(3),
+        || dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 6,
+    );
+    settle(100);
+    assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 4);
+    drop(links);
     // Carrier stays up, but the remote service is unreachable (address removed).
     {
         let _peer = uplink.enter();
@@ -300,7 +316,7 @@ fn real_traffic(ipv6: bool) {
     let _links = attach_dummies();
     send(10005, false);
     wait_for("manual mode still uses WAN1 without Internet", Duration::from_secs(3), || {
-        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 6
+        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 7
     });
     settle(100);
     assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 4);
@@ -381,6 +397,87 @@ fn wan_failover_router_rules_restore_and_preserve_lan() {
     let error = rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))).unwrap_err();
     assert!(error.contains("10427"), "{error}");
     assert_eq!(get("-4", "203.0.113.10", None).as_deref(), Some(wan2.host()));
+    assert_eq!(
+        get("-6", "2001:db8::10", None).as_deref(),
+        Some(wan1.host()),
+        "IPv4 conflict must not block IPv6 policy application"
+    );
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
+    assert_eq!(
+        get("-6", "2001:db8::10", None).as_deref(),
+        Some(wan2.host()),
+        "IPv4 foreign rule must not prevent IPv6 cleanup"
+    );
+    let rules = Command::new("ip").args(["-j", "-4", "rule", "show"]).output().unwrap();
+    let rules: Vec<serde_json::Value> = serde_json::from_slice(&rules.stdout).unwrap();
+    assert!(
+        rules.iter().any(|r| r["priority"] == 10427 && r["table"] == "main"),
+        "cleanup must preserve the unrelated IPv4 rule"
+    );
+    ip(&["-6", "rule", "add", "pref", "10427", "table", "main"]);
+    let error = rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&policy))).unwrap_err();
+    assert!(error.contains("-4:") && error.contains("-6:"), "{error}");
+}
+
+#[test]
+#[ignore = "requires root and isolated netns/veth"]
+fn wan_failover_router_cleanup_removes_orphan_routes_only() {
+    use landscape_common::sys_service::route_service::RouterWanPolicy;
+    let ns = NetNsGuard::create("foclean");
+    let _enter = ns.enter();
+    ip(&["link", "set", "lo", "up"]);
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    // A fresh namespace has no table 42700: cleanup must still be idempotent.
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
+    assert!(
+        rt.block_on(crate::maps::route::sync_router_wan_policy(Some(&RouterWanPolicy::default())))
+            .is_ok()
+    );
+    let families = [("-4", "203.0.113.0/24"), ("-6", "2001:db8::/64")];
+    for (family, foreign_prefix) in families {
+        // Model an administrator removing the rules before disabling failover.
+        for priority in ["10426", "10427"] {
+            ip(&[family, "rule", "del", "pref", priority, "protocol", "242"]);
+        }
+        ip(&[
+            family,
+            "route",
+            "add",
+            "blackhole",
+            foreign_prefix,
+            "table",
+            "42700",
+            "proto",
+            "static",
+        ]);
+    }
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
+    for (family, foreign_prefix) in families {
+        let listed = Command::new("ip")
+            .args(["-j", family, "route", "show", "table", "42700"])
+            .output()
+            .unwrap();
+        assert!(listed.status.success());
+        let routes: Vec<serde_json::Value> = serde_json::from_slice(&listed.stdout).unwrap();
+        assert_eq!(routes.len(), 1, "{family}: owned default route must be removed");
+        assert_eq!(routes[0]["dst"], foreign_prefix, "foreign protocol route must survive");
+    }
+    // Repeating cleanup with only foreign routes must leave those routes intact.
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
+    for (family, foreign_prefix) in families {
+        ip(&[
+            family,
+            "route",
+            "del",
+            "blackhole",
+            foreign_prefix,
+            "table",
+            "42700",
+            "proto",
+            "static",
+        ]);
+    }
+    assert!(rt.block_on(crate::maps::route::sync_router_wan_policy(None)).is_ok());
 }
 
 #[test]

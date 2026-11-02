@@ -75,11 +75,11 @@ export default {
       "为每条 WAN 填写对应运营商的 DNS。切换出口时同时切换 DNS 地址和连接；当前 WAN 未配置时解析失败，不会使用其他运营商或公共 DNS。IPv4 DNS 也可以解析 IPv6 记录。所有组使用下方相同的协议和端口。",
     wan_servers_invalid: "每条 WAN 只能配置一次，且至少填写一个有效 DNS 地址。",
 
-    follow_flow: "DNS 上游跟随出口",
+    follow_flow: "DNS 上游固定跟随指定分流",
     follow_flow_off: "保持原有路由 / 固定源地址",
-    default_flow: "默认 Flow (0)",
+    default_flow: "默认分流（0）",
     follow_flow_hint:
-      "绑定所选 Flow 当前 WAN 的源地址和网卡，切换时重建上游连接。无可用 WAN 的地址族不会改走其他出口。",
+      "所有引用此上游的规则，都固定跟随这里指定的分流，使用其当前 WAN 的源地址和网卡，切换时重建连接；不会自动跟随每条规则所属的分流。若多个分流需要各自切换运营商 DNS，请在各自 DNS 规则中启用“按出口选择独立 DNS 组”。无可用 WAN 的地址族不会改走其他出口。",
 
     title: "DNS 上游配置",
     copy: "复制",

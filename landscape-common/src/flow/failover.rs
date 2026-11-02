@@ -69,4 +69,7 @@ pub struct FlowWanStatus {
     pub router_policy_applied: Option<bool>,
     pub router_policy_error: Option<String>,
     pub router_policy_checked_at_ms: Option<u64>,
+    /// A disabled policy is still being removed, or its removal failed.
+    #[serde(default)]
+    pub router_policy_cleanup: bool,
 }

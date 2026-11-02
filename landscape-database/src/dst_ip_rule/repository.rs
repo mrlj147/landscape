@@ -38,6 +38,7 @@ impl DstIpRuleRepository {
         let (writer, config) = (&writer, &config);
         txn_retry_loop!(self, |txn| async move {
             Self::ensure_flow_exists(txn, config.flow_id).await?;
+            crate::dns_wan_validation::ensure_redirect_flow_exists(txn, config.mark).await?;
             writer.upsert_inner(txn, config.clone(), true).await
         })
     }
@@ -54,6 +55,7 @@ impl DstIpRuleRepository {
         txn_retry_loop!(self, |txn| async move {
             for config in configs.iter() {
                 Self::ensure_flow_exists(txn, config.flow_id).await?;
+                crate::dns_wan_validation::ensure_redirect_flow_exists(txn, config.mark).await?;
             }
             writer.upsert_many_inner(txn, configs, true).await
         })

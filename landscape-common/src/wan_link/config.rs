@@ -84,10 +84,17 @@ impl WanLinkConfig {
     /// Enabled probe families need evidence. An explicitly disabled family
     /// follows the other family's verdict; route availability is still separate.
     pub fn validate_failover_health(&self) -> Result<(), ServiceConfigError> {
+        // An administratively stopped WAN has no routes and is skipped by
+        // failover. Allow maintenance without first removing every reference;
+        // enabling the WAN again runs the full health validation below.
+        if !self.active() {
+            return Ok(());
+        }
         let (v4, v6) = self.health_check.probe_families();
         let health = &self.health_check;
-        let ipv6_enabled =
-            self.pd.enable || matches!(self.v4.model, WanLinkV4Model::Static { ipv6: Some(_), .. });
+        // Static.ipv6 is a legacy field ignored by the IPv4 runner. PD is
+        // the supported source of an IPv6 address/session on this link.
+        let ipv6_enabled = self.pd.enable;
         let usable = (self.v4.enable && health.ipv4_probe_enabled && v4)
             || (ipv6_enabled && health.ipv6_probe_enabled && v6);
         if !health.enable
@@ -739,6 +746,62 @@ mod tests {
             "attach_iface_name": "eth0"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn legacy_static_ipv6_cannot_supply_a_followed_probe_family() {
+        let mut config = minimal();
+        config.v4.enable = true;
+        config.v4.model = WanLinkV4Model::Static {
+            ipv4: Some("192.0.2.2".parse().unwrap()),
+            ipv4_mask: Some(24),
+            ipv6: Some("2001:db8::2".parse().unwrap()),
+            default_router: true,
+            default_router_ip: Some("192.0.2.1".parse().unwrap()),
+        };
+        config.health_check.enable = true;
+        config.health_check.ipv4_probe_enabled = false;
+        config.health_check.probe = WanHealthProbeConfig::Multi {
+            groups: vec![WanProbeGroup {
+                name: "IPv6".into(),
+                quorum: 1,
+                targets: vec![WanProbeTarget::Icmp { address: "2001:db8::1".parse().unwrap() }],
+            }],
+        };
+        assert!(config.validate().is_ok());
+        assert!(config.validate_failover_health().is_err());
+        config.pd.enable = true;
+        assert!(config.validate_failover_health().is_ok());
+    }
+
+    #[test]
+    fn administratively_disabled_wan_is_allowed_but_reenable_revalidates_health() {
+        let mut config = minimal();
+        config.kind = WanLinkKind::PppoeNative {
+            username: "fixture".into(),
+            password: "fixture".into(),
+            requested_mru: 1492,
+            ac_name: None,
+            lcp_echo_interval: None,
+            redial_backoff_base_secs: None,
+        };
+        config.v4.model = WanLinkV4Model::Ipcp { default_router: true };
+        assert!(!config.active());
+        assert!(config.validate_failover_health().is_ok());
+        // PD must not allow an administratively stopped PPP session to run.
+        config.pd.enable = true;
+        assert!(!config.active());
+        assert!(config.validate_failover_health().is_ok());
+        config.v4.enable = true;
+        assert!(config.active());
+        assert!(config.validate_failover_health().is_err());
+        config.health_check.enable = true;
+        config.health_check.ipv6_probe_enabled = false;
+        config.health_check.probe = WanHealthProbeConfig::Dns {
+            server: "192.0.2.53".parse().unwrap(),
+            domain: "example.com".into(),
+        };
+        assert!(config.validate_failover_health().is_ok());
     }
 
     #[test]

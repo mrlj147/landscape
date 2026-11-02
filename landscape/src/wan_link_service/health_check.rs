@@ -11,7 +11,7 @@ use arc_swap::ArcSwap;
 use futures::future::join_all;
 use landscape_common::service::{ServiceHandle, ServiceStatus};
 use landscape_common::sys_service::route_service::RouteOwner;
-use landscape_common::wan_link::{HealthCheckRuntime, HealthProbeStatus};
+use landscape_common::wan_link::{HealthCheckRuntime, HealthFamilyRuntime, HealthProbeStatus};
 use landscape_common::wan_link::{
     HealthEvaluator, LinkStateHandle, RuntimeWanHealthProbe, RuntimeWanLinkHealthCheckConfig,
     SessionIface, TargetProbe, WanLinkHealthInfo, WanLinkHealthState, swap_if_changed,
@@ -54,6 +54,29 @@ pub(super) async fn sync_followed_family(
     } else {
         routes.clear_link_health_for_family(link_id, follower_v6).await;
     }
+}
+
+pub(super) fn runtime_snapshot(
+    cfg: &RuntimeWanLinkHealthCheckConfig,
+    v4: Option<&WanLinkHealthInfo>,
+    v6: Option<&WanLinkHealthInfo>,
+    probes: Vec<HealthProbeStatus>,
+) -> HealthCheckRuntime {
+    let family = |enabled: bool, probe_enabled: bool, own, other| {
+        enabled.then(|| {
+            let info: Option<&WanLinkHealthInfo> = if probe_enabled { own } else { other };
+            HealthFamilyRuntime {
+                state: info.map_or(WanLinkHealthState::Unknown, |i| i.state),
+                probe_enabled,
+                rtt_ewma_ms: info.and_then(|i| i.rtt_ewma_ms),
+            }
+        })
+    };
+    HealthCheckRuntime::running(
+        family(cfg.ipv4_enabled, cfg.ipv4_probe_enabled, v4, v6),
+        family(cfg.ipv6_enabled, cfg.ipv6_probe_enabled, v6, v4),
+        probes,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -119,14 +142,15 @@ pub(super) async fn run(
     service_status.just_change_status(ServiceStatus::Running);
     swap_if_changed(
         &runtime,
-        HealthCheckRuntime::Running {
-            state: evaluator.info().state,
-            rtt_ewma_ms: evaluator.info().rtt_ewma_ms,
-            probes: targets
+        runtime_snapshot(
+            &config,
+            Some(evaluator.info()),
+            None,
+            targets
                 .iter()
                 .map(|target| HealthProbeStatus { target: (*target).into(), rtt_ms: None })
                 .collect(),
-        },
+        ),
     );
 
     let mut ticker = tokio::time::interval(Duration::from_secs(config.interval_secs.max(1).into()));
@@ -185,6 +209,7 @@ pub(super) async fn run(
                         sync_followed_family(&route_service, link_id, &config).await;
                         publish_round(
                             &runtime,
+                            &config,
                             evaluator.info(),
                             &round_targets,
                             Some(&results),
@@ -203,7 +228,7 @@ pub(super) async fn run(
                             failed = true;
                             break;
                         }
-                        publish_round(&runtime, evaluator.info(), &round_targets, None);
+                        publish_round(&runtime, &config, evaluator.info(), &round_targets, None);
                     }
                 }
             }
@@ -221,6 +246,7 @@ pub(super) async fn run(
 
 fn publish_round(
     runtime: &Arc<ArcSwap<HealthCheckRuntime>>,
+    cfg: &RuntimeWanLinkHealthCheckConfig,
     info: &WanLinkHealthInfo,
     attempted: &[Ipv4Addr],
     evidence: Option<&Vec<TargetProbe>>,
@@ -236,14 +262,7 @@ fn publish_round(
             }),
         })
         .collect();
-    swap_if_changed(
-        runtime,
-        HealthCheckRuntime::Running {
-            state: info.state,
-            rtt_ewma_ms: info.rtt_ewma_ms,
-            probes,
-        },
-    );
+    swap_if_changed(runtime, runtime_snapshot(cfg, Some(info), None, probes));
 }
 
 /// The round's target list: configured targets plus the link's current

@@ -2,15 +2,19 @@
 import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFailoverStore } from "@/stores/failover";
+import { flowWanPresentation } from "@/lib/flow_wan_status";
 const props = defineProps<{ flowId: number }>();
 const { t } = useI18n();
 const store = useFailoverStore();
 onMounted(store.subscribe);
 onUnmounted(store.unsubscribe);
-const rows = computed(() =>
-  store.statuses.filter((row) => row.flow_id === props.flowId),
+const presentation = computed(() =>
+  flowWanPresentation(store.statuses, props.flowId),
 );
-function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
+function name(
+  id: string | null | undefined,
+  row: (typeof presentation.value.wanRows)[number],
+) {
   if (!id) return t("flow.failover.no_exit");
   return row.candidates.find((c) => c.link_id === id)?.iface_name || id;
 }
@@ -20,7 +24,28 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
     <n-text v-if="store.unavailable" type="warning">{{
       t("flow.failover.status_unavailable")
     }}</n-text>
-    <n-flex v-for="row in rows" :key="String(row.ipv6)" vertical size="small">
+    <n-alert
+      v-if="presentation.cleanup"
+      :type="presentation.cleanup.router_policy_error ? 'error' : 'warning'"
+      :show-icon="false"
+    >
+      {{
+        t(
+          presentation.cleanup.router_policy_error
+            ? "flow.failover.router_cleanup_failed"
+            : "flow.failover.router_cleanup_pending",
+        )
+      }}
+      <div v-if="presentation.cleanup.router_policy_error">
+        {{ presentation.cleanup.router_policy_error }}
+      </div>
+    </n-alert>
+    <n-flex
+      v-for="row in presentation.wanRows"
+      :key="String(row.ipv6)"
+      vertical
+      size="small"
+    >
       <n-space align="center">
         <n-tag size="small">{{ row.ipv6 ? "IPv6" : "IPv4" }}</n-tag>
         <n-text strong
@@ -33,7 +58,7 @@ function name(id: string | null | undefined, row: (typeof rows.value)[number]) {
         }}</n-text>
       </n-space>
       <n-alert
-        v-if="row.router_policy_applied != null"
+        v-if="!row.router_policy_cleanup && row.router_policy_applied != null"
         :type="
           row.router_policy_applied
             ? 'success'

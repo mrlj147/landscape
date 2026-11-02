@@ -2,6 +2,7 @@
 """Package this checkout's Linux build for a private Landscape Kit v1 repository."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -42,7 +43,9 @@ def main():
         "webserver": {"x86_64": asset(archive)}, "static": asset(release / "static.zip")}}
     info = {"version": version, "custom_build": True,
             "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-            "repository": "mrlj147/landscape", "branch": "codex/multi-wan-failover",
+            "repository": os.environ.get("GITHUB_REPOSITORY", "mrlj147/landscape"),
+            "branch": os.environ.get("GITHUB_REF_NAME") or subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root, text=True).strip(),
             "binary_sha256": digest(binary)}
     for path, value in [(output / "repository.json", {"protocol_version": 1}),
                         (release / "manifest.json", manifest), (release / "build-info.json", info)]:

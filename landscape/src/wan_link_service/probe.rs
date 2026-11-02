@@ -24,6 +24,27 @@ pub enum ProbeError {
 /// tests can drive it with a fake.
 #[async_trait::async_trait]
 pub trait WanHealthProbe: Send + Sync {
+    /// Shared injection point for grouped IPv4/IPv6 and application probes.
+    /// Production retains the same WAN-bound sockets as individual probes.
+    async fn probe_target(
+        &self,
+        dev: &str,
+        src: IpAddr,
+        target: &landscape_common::wan_link::WanProbeTarget,
+        timeout: Duration,
+        mark: u32,
+    ) -> Result<Option<Duration>, ProbeError> {
+        if let (
+            landscape_common::wan_link::WanProbeTarget::Icmp { address: IpAddr::V4(ip) },
+            IpAddr::V4(src),
+        ) = (target, src)
+        {
+            self.ping_v4_marked(dev, src, *ip, timeout, mark).await
+        } else {
+            super::application_probe::probe_target(dev, src, target, timeout, mark).await
+        }
+    }
+
     async fn ping_v4_marked(
         &self,
         dev: &str,

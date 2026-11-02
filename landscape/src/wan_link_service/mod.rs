@@ -1032,7 +1032,7 @@ impl ConfigStoreServiceController for WanLinkServiceManagerService {
         &self,
         id: Self::Id,
     ) -> Result<Option<ServiceStatus>, DbError> {
-        let old = self.get_store().delete_and_get(id).await?;
+        let old = self.get_store().delete_unreferenced(id).await?;
         let Some(old) = old else { return Ok(None) };
         let status = self.get_service().stop_service(id.to_string()).await;
         // The whole link is gone: stopping the service above reaps its

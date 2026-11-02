@@ -159,6 +159,9 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
                 ),
             });
         }
+        if self.flow_id > u32::from(u8::MAX) {
+            return Err(ServiceConfigError::FlowIdOutOfRange { flow_id: self.flow_id });
+        }
         if (self.failover.bind_default_flow && !self.failover.ordered_targets())
             || (self.failover.bind_router_traffic && !self.failover.bind_default_flow)
         {
@@ -451,6 +454,23 @@ mod tests {
         let result = crate::database::validator::ValidatableConfig::validate(&config);
 
         assert!(result.is_err(), "flow_id 0 is reserved for the default flow");
+    }
+
+    #[test]
+    fn rejects_flow_ids_that_alias_another_dataplane_flow() {
+        use crate::database::validator::ValidatableConfig;
+        let mut config: FlowConfig = serde_json::from_value(serde_json::json!({
+            "enable": true, "flow_id": 255, "flow_match_rules": [],
+            "flow_targets": [], "remark": "last supported flow"
+        }))
+        .unwrap();
+        assert!(config.validate().is_ok());
+        for id in [256, 300, u32::MAX] {
+            config.flow_id = id;
+            assert!(
+                matches!(config.validate(), Err(ServiceConfigError::FlowIdOutOfRange { flow_id }) if flow_id == id)
+            );
+        }
     }
 
     #[test]
