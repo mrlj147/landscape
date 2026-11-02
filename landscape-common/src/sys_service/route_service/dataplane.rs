@@ -39,6 +39,11 @@ pub trait RouteTableDataplane: Send + Sync {
     /// own). Returns `false` when the sync failed and should be retried.
     async fn sync_kernel_default_ipv4(&self, nexthops: &[RouteTargetInfo]) -> bool;
 
+    /// Give explicitly interface-bound host sockets a gateway on every WAN.
+    async fn sync_bound_wan_routes(&self, _targets: &[WanRouteTarget]) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Own only dedicated, tagged rules/table for unmarked host traffic.
     async fn sync_router_wan_policy(
         &self,

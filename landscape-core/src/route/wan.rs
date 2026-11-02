@@ -322,10 +322,19 @@ impl IpRouteService {
                         _ = ticker.tick() => {}
                     }
                     service.reconcile_kernel_default_ipv4().await;
+                    service.reconcile_bound_wan_routes().await;
                     service.reconcile_router_wan_policy().await;
                 }
             },
         );
+    }
+
+    async fn reconcile_bound_wan_routes(&self) {
+        let mut targets: Vec<_> = self.clone_ipv4_wan_infos().await.into_values().collect();
+        targets.extend(self.clone_ipv6_wan_infos().await.into_values());
+        if let Err(error) = self.dataplane.sync_bound_wan_routes(&targets).await {
+            tracing::error!(%error, "bound WAN gateway sync failed; retrying on next reconcile");
+        }
     }
 
     pub(crate) async fn reconcile_router_wan_policy(&self) {

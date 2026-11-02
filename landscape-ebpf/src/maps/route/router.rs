@@ -11,10 +11,10 @@ const PROTOCOL: &str = "242";
 const KEEP_LOCAL: &str = "10426";
 const USE_WAN: &str = "10427";
 
-async fn command(args: &[String]) -> Result<std::process::Output, String> {
+pub(super) async fn command(args: &[String]) -> Result<std::process::Output, String> {
     Command::new("ip").args(args).output().await.map_err(|e| e.to_string())
 }
-async fn apply(args: Vec<String>) -> Result<(), String> {
+pub(super) async fn apply(args: Vec<String>) -> Result<(), String> {
     let output = command(&args).await?;
     if output.status.success() {
         Ok(())
@@ -22,10 +22,10 @@ async fn apply(args: Vec<String>) -> Result<(), String> {
         Err(format!("ip {}: {}", args.join(" "), String::from_utf8_lossy(&output.stderr)))
     }
 }
-fn strings(parts: &[&str]) -> Vec<String> {
+pub(super) fn strings(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| (*s).into()).collect()
 }
-fn number(value: &Value) -> Option<u64> {
+pub(super) fn number(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 fn rule_args(family: &str, action: &str, local: bool) -> Vec<String> {
@@ -49,7 +49,7 @@ fn rule_args(family: &str, action: &str, local: bool) -> Vec<String> {
     }
     args
 }
-fn default_args(family: &str, target: Option<&RouteTargetInfo>) -> Vec<String> {
+pub(super) fn default_args(family: &str, target: Option<&RouteTargetInfo>) -> Vec<String> {
     let mut args = strings(&[family, "route", "replace", "table", TABLE]);
     if let Some(target) = target {
         args.push("default".into());

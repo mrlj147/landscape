@@ -1,7 +1,10 @@
 //! Privileged tests use disposable network namespaces and local responders.
-//! The default route deliberately prefers WAN2; WAN1 probes must never use it.
+//! Only WAN2 has a main-table default; bound WAN1 probes need their own gateway.
 use super::application_probe::probe_target;
-use landscape_common::wan_link::WanProbeTarget;
+use landscape_common::{
+    sys_service::route_service::{RouteTargetInfo, WanRouteTarget},
+    wan_link::WanProbeTarget,
+};
 use std::{
     process::{Child, Command, Stdio},
     time::Duration,
@@ -94,34 +97,40 @@ fn health_probes_are_confined_and_recover_in_both_families() {
         ip(&["-n", &peer.name, "-6", "addr", "add", "fe80::53/64", "dev", &remote, "nodad"]);
         ip(&["-n", &peer.name, "addr", "add", "198.19.0.53/32", "dev", "lo"]);
         ip(&["-n", &peer.name, "-6", "addr", "add", "fd53::53/128", "dev", "lo", "nodad"]);
-        let metric = if n == 1 { "200" } else { "100" };
-        ip(&[
-            "route",
-            "add",
-            "default",
-            "via",
-            &format!("198.18.{n}.2"),
-            "dev",
-            &dev,
-            "metric",
-            metric,
-        ]);
-        ip(&[
-            "-6",
-            "route",
-            "add",
-            "default",
-            "via",
-            &format!("fd00:{n}::2"),
-            "dev",
-            &dev,
-            "metric",
-            metric,
-        ]);
+        // Reproduce a secondary native PPPoE WAN with no kernel default.
+        if n == 2 {
+            ip(&["route", "add", "default", "via", "198.18.2.2", "dev", &dev]);
+            ip(&["-6", "route", "add", "default", "via", "fd00:2::2", "dev", &dev]);
+        }
         peer.start();
         peers.push(peer);
     }
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let mut bindings = Vec::new();
+    for n in 1..=2 {
+        let dev = format!("w{n}");
+        for info in [
+            RouteTargetInfo::new_gateway_v4(
+                0,
+                &dev,
+                None,
+                format!("198.18.{n}.1").parse().unwrap(),
+                format!("198.18.{n}.2").parse().unwrap(),
+                false,
+            ),
+            RouteTargetInfo::new_gateway_v6(
+                0,
+                &dev,
+                None,
+                format!("fd00:{n}::1").parse().unwrap(),
+                format!("fd00:{n}::2").parse().unwrap(),
+                false,
+            ),
+        ] {
+            bindings.push(WanRouteTarget::link(n, info));
+        }
+    }
+    rt.block_on(landscape_ebpf::maps::route::sync_bound_wan_routes(&bindings)).unwrap();
     let check = |n: u32, ipv6: bool, application_healthy: bool| {
         rt.block_on(async {
             let src = if ipv6 { format!("fd00:{n}::1") } else { format!("198.18.{n}.1") }

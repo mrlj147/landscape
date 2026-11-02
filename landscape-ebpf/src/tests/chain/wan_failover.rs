@@ -382,3 +382,119 @@ fn wan_failover_router_rules_restore_and_preserve_lan() {
     assert!(error.contains("10427"), "{error}");
     assert_eq!(get("-4", "203.0.113.10", None).as_deref(), Some(wan2.host()));
 }
+
+#[test]
+#[ignore = "requires root and isolated netns/veth"]
+fn bound_wan_gateway_without_main_default_and_reconciliation() {
+    use crate::maps::route::sync_bound_wan_routes;
+    let ns = NetNsGuard::create("fobind");
+    let _enter = ns.enter();
+    ip(&["link", "set", "lo", "up"]);
+    let wan1 = VethPair::create("fba");
+    let wan2 = VethPair::create("fbb");
+    for (dev, v4, v6) in [
+        (wan1.host(), "198.18.1.1/24", "fd00:1::1/64"),
+        (wan2.host(), "198.18.2.1/24", "fd00:2::1/64"),
+    ] {
+        ip(&["addr", "add", v4, "dev", dev]);
+        ip(&["-6", "addr", "add", v6, "dev", dev, "nodad"]);
+    }
+    ip(&["route", "add", "default", "via", "198.18.2.2", "dev", wan2.host()]);
+    ip(&["-6", "route", "add", "default", "via", "fd00:2::2", "dev", wan2.host()]);
+    let mut targets = Vec::new();
+    for (chain, wan) in [(1, &wan1), (2, &wan2)] {
+        for info in [
+            RouteTargetInfo::new_gateway_v4(
+                wan.host_ifindex(),
+                wan.host(),
+                None,
+                format!("198.18.{chain}.1").parse().unwrap(),
+                format!("198.18.{chain}.2").parse().unwrap(),
+                false,
+            ),
+            RouteTargetInfo::new_gateway_v6(
+                wan.host_ifindex(),
+                wan.host(),
+                None,
+                format!("fd00:{chain}::1").parse().unwrap(),
+                format!("fd00:{chain}::2").parse().unwrap(),
+                false,
+            ),
+        ] {
+            targets.push(WanRouteTarget::link(chain, info));
+        }
+    }
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let get = |family: &str, dst: &str, oif: Option<&str>| {
+        let mut args = vec!["-j", family, "route", "get", dst];
+        if let Some(oif) = oif {
+            args.extend(["oif", oif]);
+        }
+        let output = Command::new("ip").args(args).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let routes: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        routes[0].clone()
+    };
+    // Idempotent reconcile must not duplicate rules.
+    for _ in 0..2 {
+        rt.block_on(sync_bound_wan_routes(&targets)).unwrap();
+    }
+    for (family, dst, gateway, peer) in [
+        ("-4", "203.0.113.10", "198.18.1.2", "198.18.1.3"),
+        ("-6", "2001:db8::10", "fd00:1::2", "fd00:1::3"),
+    ] {
+        assert_eq!(get(family, dst, Some(wan1.host()))["gateway"], gateway);
+        assert_eq!(get(family, dst, None)["dev"], wan2.host(), "unbound traffic unchanged");
+        assert!(
+            get(family, peer, Some(wan1.host()))["gateway"].is_null(),
+            "connected routes preserved"
+        );
+        let rules = Command::new("ip").args(["-j", family, "rule", "show"]).output().unwrap();
+        let rules: Vec<serde_json::Value> = serde_json::from_slice(&rules.stdout).unwrap();
+        assert_eq!(
+            rules.iter().filter(|r| matches!(r["priority"].as_u64(), Some(10424 | 10425))).count(),
+            4
+        );
+    }
+    let local = get("-6", "fe80::53", Some(wan1.host()));
+    assert_eq!(local["dev"], wan1.host());
+    assert!(local["gateway"].is_null(), "link-local must remain on-link");
+
+    // Reuse chain 1 after its interface changes, as in a PPPoE restart.
+    // Removing the old oif rule must not flush the newly installed table.
+    let moved: Vec<_> = targets
+        .iter()
+        .filter(|t| t.link_chain_id == 2)
+        .cloned()
+        .map(|mut t| {
+            t.link_chain_id = 1;
+            t
+        })
+        .collect();
+    rt.block_on(sync_bound_wan_routes(&moved)).unwrap();
+    assert_eq!(get("-4", "203.0.113.10", Some(wan2.host()))["gateway"], "198.18.2.2");
+    for (family, dst) in [("-4", "203.0.113.10"), ("-6", "2001:db8::10")] {
+        let route = get(family, dst, Some(wan2.host()));
+        let table = route["table"].as_u64().or_else(|| route["table"].as_str()?.parse().ok());
+        assert_eq!(table, Some(43001));
+    }
+    rt.block_on(sync_bound_wan_routes(&[])).unwrap();
+    for family in ["-4", "-6"] {
+        let rules = Command::new("ip").args(["-j", family, "rule", "show"]).output().unwrap();
+        let rules: Vec<serde_json::Value> = serde_json::from_slice(&rules.stdout).unwrap();
+        assert!(!rules.iter().any(|r| matches!(r["priority"].as_u64(), Some(10424 | 10425))));
+    }
+    assert_eq!(get("-4", "203.0.113.10", None)["dev"], wan2.host());
+    // Never claim or overwrite an administrator's rule/table.
+    ip(&["rule", "add", "pref", "10425", "table", "main"]);
+    assert!(rt.block_on(sync_bound_wan_routes(&targets)).unwrap_err().contains("10425"));
+    ip(&["rule", "del", "pref", "10425", "table", "main"]);
+    ip(&["route", "add", "blackhole", "default", "table", "43001", "proto", "static"]);
+    assert!(rt.block_on(sync_bound_wan_routes(&targets)).unwrap_err().contains("foreign routes"));
+    ip(&["route", "del", "blackhole", "default", "table", "43001", "proto", "static"]);
+    rt.block_on(sync_bound_wan_routes(&targets)).unwrap();
+    ip(&["link", "del", wan1.host()]);
+    targets.retain(|t| t.link_chain_id == 2);
+    rt.block_on(sync_bound_wan_routes(&targets)).unwrap();
+    assert_eq!(get("-4", "203.0.113.10", Some(wan2.host()))["gateway"], "198.18.2.2");
+}
