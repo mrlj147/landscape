@@ -107,7 +107,7 @@ impl FlowConfigRepository {
                             reason: format!("flow target references unknown wan link {link_id}"),
                         }));
                     };
-                    if change.enable && change.failover.enable {
+                    if change.enable && change.failover.requires_health_checks() {
                         link.validate_failover_health().map_err(invalid)?;
                     }
                 }
@@ -670,7 +670,7 @@ impl landscape_common::database::validator::StoreValidator<FlowConfig> for FlowC
             }
         }
 
-        if config.enable && config.failover.enable {
+        if config.enable && config.failover.requires_health_checks() {
             let store = crate::wan_link::repository::WanLinkRepository::new(self.db.clone());
             for target in &config.flow_targets {
                 if let FlowTarget::Interface { link_id, .. } = target.target {

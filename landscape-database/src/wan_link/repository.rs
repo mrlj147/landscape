@@ -34,7 +34,7 @@ impl WanLinkRepository {
         let flows: Vec<_> =
             FlowConfigEntity::find().all(txn).await?.into_iter().map(FlowConfig::from).collect();
         for config in configs {
-            if flows.iter().any(|flow| flow.enable && flow.failover.enable && flow.flow_targets.iter().any(|entry| matches!(entry.target, FlowTarget::Interface { link_id, .. } if link_id == config.id))) {
+            if flows.iter().any(|flow| flow.enable && flow.failover.requires_health_checks() && flow.flow_targets.iter().any(|entry| matches!(entry.target, FlowTarget::Interface { link_id, .. } if link_id == config.id))) {
                 config.validate_failover_health().map_err(|error| UpsertErr::Database(DbError::Validation(error)))?;
             }
         }
@@ -230,7 +230,7 @@ impl StoreValidator<WanLinkConfig> for WanLinkRepository {
                 .await
                 .map_err(ServiceConfigError::internal)?;
             let referenced_by = flows.iter().find(|flow| {
-                flow.enable && flow.failover.enable && flow.flow_targets.iter().any(|entry| {
+                flow.enable && flow.failover.requires_health_checks() && flow.flow_targets.iter().any(|entry| {
                     matches!(entry.target, landscape_common::flow::FlowTarget::Interface { link_id, .. } if link_id == config.id)
                 })
             });

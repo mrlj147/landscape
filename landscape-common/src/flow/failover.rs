@@ -58,6 +58,8 @@ pub struct FlowWanStatus {
     pub flow_id: u32,
     pub ipv6: bool,
     pub automatic: bool,
+    #[serde(default)]
+    pub trigger: super::FlowFailoverTrigger,
     pub active_link_id: Option<Uuid>,
     pub active_iface_name: Option<String>,
     pub reason: WanSelectionReason,

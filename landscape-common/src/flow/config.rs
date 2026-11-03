@@ -45,6 +45,9 @@ pub struct FlowConfig {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlowFailoverConfig {
+    /// Probe verdicts or acquired link routes decide automatic eligibility.
+    #[serde(default)]
+    pub trigger: FlowFailoverTrigger,
     /// Ordered mode remains selected when automatic switching is turned off.
     #[serde(default)]
     pub mode: FlowTargetMode,
@@ -102,9 +105,19 @@ fn default_auto_failback() -> bool {
     true
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FlowFailoverTrigger {
+    #[default]
+    HealthCheck,
+    LinkState,
+}
+
 impl Default for FlowFailoverConfig {
     fn default() -> Self {
         Self {
+            trigger: FlowFailoverTrigger::HealthCheck,
             mode: FlowTargetMode::Weighted,
             enable: false,
             auto_failback: true,
@@ -130,6 +143,10 @@ pub enum FlowTargetMode {
 }
 
 impl FlowFailoverConfig {
+    pub fn requires_health_checks(&self) -> bool {
+        self.enable && self.trigger == FlowFailoverTrigger::HealthCheck
+    }
+
     pub fn ordered_targets(&self) -> bool {
         self.enable || self.mode == FlowTargetMode::PrimaryBackup
     }
@@ -482,6 +499,7 @@ mod tests {
         }))
         .unwrap();
         assert!(!config.failover.enable);
+        assert_eq!(config.failover.trigger, FlowFailoverTrigger::HealthCheck);
         assert!(config.failover.auto_failback);
         config.failover.enable = true;
         assert!(config.validate().is_err());

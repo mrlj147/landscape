@@ -46,13 +46,23 @@ function name(
       vertical
       size="small"
     >
+      <n-alert
+        v-if="row.trigger === 'link_state'"
+        type="info"
+        :show-icon="false"
+        >{{ t("flow.failover.link_hint") }}</n-alert
+      >
       <n-space align="center">
         <n-tag size="small">{{ row.ipv6 ? "IPv6" : "IPv4" }}</n-tag>
         <n-text strong
           >{{ t("flow.failover.active") }}:
           {{ row.active_iface_name || t("flow.failover.no_exit") }}</n-text
         >
-        <n-text depth="3">{{ t(`flow.failover.reason.${row.reason}`) }}</n-text>
+        <n-text depth="3">{{
+          row.trigger === "link_state" && row.reason === "healthy"
+            ? t("flow.failover.link_online")
+            : t(`flow.failover.reason.${row.reason}`)
+        }}</n-text>
         <n-text v-if="row.retry_after_secs != null" depth="3">{{
           t("flow.failover.remaining", { seconds: row.retry_after_secs })
         }}</n-text>
@@ -85,14 +95,19 @@ function name(
           :key="candidate.link_id"
           size="small"
           :type="
-            !candidate.route_available || candidate.health === 'unhealthy'
+            !candidate.route_available ||
+            (row.trigger !== 'link_state' && candidate.health === 'unhealthy')
               ? 'error'
-              : candidate.health === 'healthy'
+              : row.trigger === 'link_state' || candidate.health === 'healthy'
                 ? 'success'
                 : 'warning'
           "
         >
           {{ candidate.iface_name || candidate.link_id }} ·
+          <template
+            v-if="row.trigger === 'link_state' && candidate.route_available"
+            >{{ t("flow.failover.link_online") }} ·
+          </template>
           {{
             t(
               `flow.failover.health.${candidate.route_available ? candidate.health : "disconnected"}`,

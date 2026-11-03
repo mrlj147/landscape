@@ -136,7 +136,7 @@ pub(crate) fn validate_network_snapshot(config: &InitConfig) -> Result<(), Servi
                         flow.flow_id
                     )));
                 };
-                if flow.enable && flow.failover.enable {
+                if flow.enable && flow.failover.requires_health_checks() {
                     link.validate_failover_health()?;
                 }
             }

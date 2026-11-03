@@ -1,5 +1,12 @@
 export default {
   failover: {
+    trigger: "自动切换依据",
+    trigger_health: "外网健康探测",
+    trigger_link: "PPPoE 拨号／链路状态",
+    link_online: "拨号／出口路由在线",
+    link_hint:
+      "仅在拨号断开或该地址族出口路由消失时切换。DNS／网页探测仅供参考，不触发切换；拨号在线但外网不通时仍保持原出口。",
+
     cause: {
       available_wan: "发现可用出口",
       manual_primary: "关闭自动切换，固定主 WAN",
@@ -59,7 +66,7 @@ export default {
     restore_weighted: "恢复权重分流模式",
     enable: "启用 WAN 主备切换",
     auto_failback: "主 WAN 恢复后自动切回",
-    hint: "出口从上到下依次为主 WAN、备用 WAN。请先启用每条 WAN 的健康检测，只校验开启的探测地址族；关闭某地址族探测后沿用另一地址族的健康结果；优先使用检测正常的出口，未知状态按宽限期设置处理。关闭后固定走主 WAN，即使主 WAN 无法访问外网也不会切到备用。切换时已有连接可能需要重连。",
+    hint: "出口从上到下依次为主 WAN、备用 WAN。使用外网健康探测模式时，请先启用每条 WAN 的健康检测，只校验开启的探测地址族；关闭某地址族探测后沿用另一地址族的健康结果；优先使用检测正常的出口，未知状态按宽限期设置处理。关闭后固定走主 WAN，即使主 WAN 无法访问外网也不会切到备用。切换时已有连接可能需要重连。",
     invalid_targets: "主备切换至少需要两条不同的 WAN，不能选择容器出口。",
     primary: "主 WAN",
     backup: "备用 WAN {index}",

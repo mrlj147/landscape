@@ -132,6 +132,7 @@ impl FailoverSelections {
                     flow_id: config.flow_id,
                     ipv6,
                     automatic: config.failover.enable,
+                    trigger: config.failover.trigger,
                     active_link_id: None,
                     active_iface_name: None,
                     selected_at_ms: now_ms(),
@@ -148,8 +149,16 @@ impl FailoverSelections {
             let reordered = state.order != order;
             let previous = state.selected;
             let has_route = |id: &Uuid| routes.contains_key(&RouteOwner::Link(*id));
-            let verdict =
+            let probe_verdict =
                 |id: &Uuid| health.get(id).map_or(WanLinkHealthState::Unknown, |info| info.state);
+            let link_only =
+                config.failover.trigger == landscape_common::flow::FlowFailoverTrigger::LinkState;
+            let verdict =
+                |id: &Uuid| if link_only { WanLinkHealthState::Healthy } else { probe_verdict(id) };
+            if state.status.trigger != config.failover.trigger {
+                state.unknown_since.clear();
+                state.healthy_since.clear();
+            }
             let healthy = |id: &Uuid| has_route(id) && verdict(id) == WanLinkHealthState::Healthy;
             for id in &order {
                 if has_route(id) && verdict(id) == WanLinkHealthState::Unknown {
@@ -338,6 +347,7 @@ impl FailoverSelections {
             state.selected_route = selected_route;
             state.order = order.clone();
             state.status.automatic = config.failover.enable;
+            state.status.trigger = config.failover.trigger;
             state.status.active_link_id = selected;
             state.status.active_iface_name = selected
                 .and_then(|id| routes.get(&RouteOwner::Link(id)))
@@ -352,7 +362,7 @@ impl FailoverSelections {
                         .get(&RouteOwner::Link(id))
                         .map(|r| r.info.iface_name.clone()),
                     route_available: has_route(&id),
-                    health: verdict(&id),
+                    health: probe_verdict(&id),
                 })
                 .collect();
             let targets = selected
@@ -515,6 +525,7 @@ impl IpRouteService {
                         flow_id: 0,
                         ipv6,
                         automatic: false,
+                        trigger: Default::default(),
                         active_link_id: None,
                         active_iface_name: None,
                         reason:
@@ -1049,6 +1060,94 @@ mod failover_tests {
             .iter()
             .map(|(target, _)| target.info.iface_name.clone())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn link_state_default_alias_and_dns_follow_route_loss_without_health() {
+        use landscape_common::flow::FlowFailoverTrigger;
+        let (mut cfg, routes, _, a, b) = setup();
+        cfg.failover.trigger = FlowFailoverTrigger::LinkState;
+        cfg.failover.bind_default_flow = true;
+        let service = super::super::test_used_ip_route();
+        for (owner, route) in routes {
+            service.insert_ipv4_wan_route(&owner, route.clone()).await;
+            let mut v6 = route;
+            v6.info.iface_ip = "2001:db8::2".parse().unwrap();
+            v6.info.gateway_ip = "2001:db8::1".parse().unwrap();
+            service.insert_ipv6_wan_route(&owner, v6).await;
+        }
+        service.sync_flow_wan_targets(std::slice::from_ref(&cfg)).await;
+        let statuses = service.get_flow_wan_statuses().await;
+        assert_eq!(statuses.len(), 4);
+        assert!(statuses.iter().all(|s| s.active_link_id == Some(a) && s.trigger == FlowFailoverTrigger::LinkState));
+        service.remove_ipv4_link_route(a).await;
+        service.remove_ipv6_link_route(a).await;
+        service.sync_flow_wan_targets(&[cfg]).await;
+        assert!(service.get_flow_wan_statuses().await.iter().all(|s| s.active_link_id == Some(b)));
+        let dns = service.dns_wan_binding(0).await;
+        assert_eq!(dns.ipv4_link_id, Some(b));
+        assert_eq!(dns.ipv6_link_id, Some(b));
+    }
+
+    #[test]
+    fn link_state_ignores_probes_but_fails_over_and_waits_for_session_recovery() {
+        use landscape_common::flow::FlowFailoverTrigger;
+        for ipv6 in [false, true] {
+            let (mut cfg, mut routes, mut health, a, b) = setup();
+            cfg.failover.trigger = FlowFailoverTrigger::LinkState;
+            cfg.failover.failback_delay_secs = 5;
+            cfg.failover.bind_default_flow = true;
+            let mut state = FailoverSelections::default();
+            let now = std::time::Instant::now();
+            let choose = |state: &mut FailoverSelections,
+                          cfg: &FlowConfig,
+                          routes: &WanRoutesByOwner,
+                          health: &LinkHealths,
+                          secs| {
+                state.resolve_at(
+                    std::slice::from_ref(cfg),
+                    routes,
+                    health,
+                    ipv6,
+                    now + std::time::Duration::from_secs(secs),
+                );
+                state.active[&(9, ipv6)].selected
+            };
+            for h in health.values_mut() {
+                h.state = WanLinkHealthState::Unhealthy;
+            }
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 0), Some(a));
+            let generation = state.active[&(9, ipv6)].generation;
+            assert_eq!(
+                state.active[&(9, ipv6)].status.candidates[0].health,
+                WanLinkHealthState::Unhealthy
+            );
+            health.clear();
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 1000), Some(a));
+            assert_eq!(state.active[&(9, ipv6)].generation, generation);
+            let primary = routes.remove(&RouteOwner::Link(a)).unwrap();
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 1001), Some(b));
+            assert_eq!(
+                state.active[&(9, ipv6)].status.history.last().unwrap().cause,
+                landscape_common::flow::failover::WanSwitchCause::LinkUnavailable
+            );
+            routes.insert(RouteOwner::Link(a), primary);
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 1002), Some(b));
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 1006), Some(b));
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 1007), Some(a));
+            let retained_generation = state.active[&(9, ipv6)].generation;
+            let mut failed = HealthEvaluator::new(b, 1, 1, 1).info().clone();
+            failed.state = WanLinkHealthState::Unhealthy;
+            health.insert(b, failed);
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 2000), Some(a));
+            assert_eq!(state.active[&(9, ipv6)].generation, retained_generation);
+            routes.remove(&RouteOwner::Link(b));
+            choose(&mut state, &cfg, &routes, &health, 2001);
+            assert!(state.active[&(9, ipv6)].generation > retained_generation);
+            routes.clear();
+            cfg.failover.fail_open_on_unknown = true;
+            assert_eq!(choose(&mut state, &cfg, &routes, &health, 2002), None);
+        }
     }
 
     #[test]

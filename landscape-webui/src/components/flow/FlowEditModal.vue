@@ -86,6 +86,7 @@ async function enter() {
   rule.value.failover = {
     bind_default_flow: false,
     bind_router_traffic: false,
+    trigger: "health_check",
     unknown_grace_secs: 30,
     fail_open_on_unknown: false,
     failback_delay_secs: 30,
@@ -133,6 +134,7 @@ async function saveRule() {
   rule.value.failover = {
     bind_default_flow: false,
     bind_router_traffic: false,
+    trigger: "health_check",
     unknown_grace_secs: 30,
     fail_open_on_unknown: false,
     failback_delay_secs: 30,
@@ -260,6 +262,26 @@ function normalizeFlowTargets(
       </n-form-item>
       <n-form-item
         v-if="rule.failover?.enable"
+        :label="t('flow.failover.trigger')"
+      >
+        <n-select
+          v-model:value="rule.failover.trigger"
+          :options="[
+            { label: t('flow.failover.trigger_health'), value: 'health_check' },
+            { label: t('flow.failover.trigger_link'), value: 'link_state' },
+          ]"
+        />
+      </n-form-item>
+      <n-alert
+        v-if="rule.failover?.enable && rule.failover.trigger === 'link_state'"
+        type="info"
+        :show-icon="false"
+        style="margin-bottom: 16px"
+      >
+        {{ t("flow.failover.link_hint") }}
+      </n-alert>
+      <n-form-item
+        v-if="rule.failover?.enable"
         :label="t('flow.failover.auto_failback')"
       >
         <n-switch v-model:value="rule.failover.auto_failback" />
@@ -287,14 +309,18 @@ function normalizeFlowTargets(
             />
           </n-form-item>
           <n-text depth="3">{{ t("flow.failover.binding_hint") }}</n-text>
-          <n-form-item :label="t('flow.failover.unknown_grace')"
+          <n-form-item
+            v-if="rule.failover.trigger !== 'link_state'"
+            :label="t('flow.failover.unknown_grace')"
             ><n-input-number
               v-model:value="rule.failover.unknown_grace_secs"
               :min="0"
               :max="600"
               :clearable="false"
           /></n-form-item>
-          <n-form-item :label="t('flow.failover.fail_open')"
+          <n-form-item
+            v-if="rule.failover.trigger !== 'link_state'"
+            :label="t('flow.failover.fail_open')"
             ><n-switch v-model:value="rule.failover.fail_open_on_unknown"
           /></n-form-item>
           <n-form-item :label="t('flow.failover.failback_delay')"

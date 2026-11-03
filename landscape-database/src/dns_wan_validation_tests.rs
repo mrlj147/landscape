@@ -664,3 +664,26 @@ async fn stopped_flow_allows_health_maintenance_but_reenable_rechecks_active_wan
     db.wan_link_store().checked_upsert(wan).await.unwrap();
     db.flow_rule_store().checked_upsert(flow).await.unwrap();
 }
+
+#[tokio::test]
+async fn link_state_failover_allows_no_probes_but_health_mode_rechecks_them() {
+    use landscape_common::flow::FlowFailoverTrigger;
+    let mut cfg = fixture();
+    cfg.flow_rules[0].failover.trigger = FlowFailoverTrigger::LinkState;
+    for wan in &mut cfg.wan_links {
+        wan.health_check.enable = false;
+    }
+    validate_network_snapshot(&cfg).unwrap();
+    let provider = LandscapeDBServiceProvider::mem_test_db().await;
+    provider.truncate_and_fit_from(Some(cfg.clone())).await.unwrap();
+    let mut flow =
+        provider.flow_rule_store().find_by_id(cfg.flow_rules[0].id).await.unwrap().unwrap();
+    provider.flow_rule_store().checked_upsert(flow.clone()).await.unwrap();
+    let wan = provider.wan_link_store().find_by_id(cfg.wan_links[0].id).await.unwrap().unwrap();
+    provider.wan_link_store().checked_upsert(wan).await.unwrap();
+    flow = provider.flow_rule_store().find_by_id(flow.id).await.unwrap().unwrap();
+    flow.failover.trigger = FlowFailoverTrigger::HealthCheck;
+    assert!(provider.flow_rule_store().checked_upsert(flow).await.is_err());
+    cfg.flow_rules[0].failover.trigger = FlowFailoverTrigger::HealthCheck;
+    assert!(validate_network_snapshot(&cfg).is_err());
+}

@@ -302,6 +302,48 @@ fn real_traffic(ipv6: bool) {
     settle(100);
     assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 4);
     drop(links);
+    // Link-state mode keeps the session's exit despite failed Internet probes.
+    config.failover.trigger = landscape_common::flow::FlowFailoverTrigger::LinkState;
+    runtime.block_on(async {
+        health(&routes, a, false, ipv6).await;
+        routes.sync_flow_wan_targets(&[config.clone()]).await;
+    });
+    let links = attach_dummies();
+    send(10006, true);
+    wait_for("link-only ignores failed probes", Duration::from_secs(3), || {
+        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 7
+    });
+    drop(links);
+    // Session/route disappearance still switches, even when both probes fail.
+    let original_route = runtime.block_on(async {
+        let map = if ipv6 {
+            routes.get_all_ipv6_wan_routes().await
+        } else {
+            routes.get_all_ipv4_wan_routes().await
+        };
+        let old = map[&RouteOwner::Link(a)].clone();
+        if ipv6 {
+            routes.remove_ipv6_link_route(a).await;
+        } else {
+            routes.remove_ipv4_link_route(a).await;
+        }
+        routes.sync_flow_wan_targets(&[config.clone()]).await;
+        old
+    });
+    let links = attach_dummies();
+    send(10007, true);
+    wait_for("link-only route loss switches to WAN2", Duration::from_secs(3), || {
+        dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6) == 5
+    });
+    drop(links);
+    runtime.block_on(async {
+        if ipv6 {
+            routes.insert_ipv6_link_route(a, original_route).await;
+        } else {
+            routes.insert_ipv4_link_route(a, original_route).await;
+        }
+        routes.sync_flow_wan_targets(&[config.clone()]).await;
+    });
     // Carrier stays up, but the remote service is unreachable (address removed).
     {
         let _peer = uplink.enter();
@@ -316,10 +358,10 @@ fn real_traffic(ipv6: bool) {
     let _links = attach_dummies();
     send(10005, false);
     wait_for("manual mode still uses WAN1 without Internet", Duration::from_secs(3), || {
-        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 7
+        dummy_recv_count(&dummy1.maps.dummy_recv_map, ipv6) == 8
     });
     settle(100);
-    assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 4);
+    assert_eq!(dummy_recv_count(&dummy2.maps.dummy_recv_map, ipv6), 5);
 }
 
 #[test]

@@ -1,5 +1,12 @@
 export default {
   failover: {
+    trigger: "Automatic failover trigger",
+    trigger_health: "Internet health probes",
+    trigger_link: "PPPoE session / link state",
+    link_online: "Session / egress route available",
+    link_hint:
+      "Switch only when the session disconnects or this address family loses its egress route. DNS/HTTP probes are advisory; an online session with an Internet outage keeps its exit.",
+
     cause: {
       available_wan: "Usable exit became available",
       manual_primary: "Automatic switching disabled; use primary",
@@ -61,7 +68,7 @@ export default {
     restore_weighted: "Restore weighted routing mode",
     enable: "Enable WAN failover",
     auto_failback: "Return to primary WAN after recovery",
-    hint: "Order exits from primary to backups. Enable health checks on every WAN first; enabled probe families require targets; a disabled family inherits the other health verdict. Unknown exits follow the grace/fail-open settings. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
+    hint: "Order exits from primary to backups. For health-probe mode, enable health checks on every WAN first; enabled probe families require targets; a disabled family inherits the other health verdict. Unknown exits follow the grace/fail-open settings. When automatic switching is off, traffic stays on the primary even if it cannot reach the Internet. Existing connections may need to reconnect.",
     invalid_targets:
       "Failover requires at least two distinct WAN links and does not support container exits.",
     primary: "Primary WAN",
