@@ -26,7 +26,7 @@ mod integration_tests;
 pub(crate) mod test_util;
 
 #[cfg(feature = "pool-native")]
-use hickory_proto::{op::Query, rr::Name};
+use hickory_proto::op::Query;
 #[cfg(feature = "pool-native")]
 use hickory_resolver::net::{DnsError, NoRecords};
 #[cfg(feature = "pool-native")]
