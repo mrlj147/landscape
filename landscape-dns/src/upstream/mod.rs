@@ -8,6 +8,7 @@ use hickory_resolver::{Resolver, lookup::Lookup, net::NetError};
 
 use landscape_common::dns::config::DnsUpstreamConfig;
 
+use crate::domain::ParsedDomain;
 use legacy::provider::MarkConnectionProvider;
 
 pub(crate) mod legacy;
@@ -26,7 +27,7 @@ mod integration_tests;
 pub(crate) mod test_util;
 
 #[cfg(feature = "pool-native")]
-use hickory_proto::{op::Query, rr::Name};
+use hickory_proto::op::Query;
 #[cfg(feature = "pool-native")]
 use hickory_resolver::net::{DnsError, NoRecords};
 #[cfg(feature = "pool-native")]
@@ -41,6 +42,8 @@ use std::time::{Duration, Instant};
 // difference never turns into copies.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum LandscapeResolver {
+    /// Keep the matching rule active and fail closed when its WAN has no DNS servers.
+    Unavailable,
     /// hickory's built-in name server pool.
     Legacy(Resolver<MarkConnectionProvider>),
     /// Experimental self-managed engine, see `exp_pool`.
@@ -54,26 +57,34 @@ pub(crate) enum LandscapeResolver {
 impl LandscapeResolver {
     pub(crate) async fn lookup(
         &self,
-        domain: &str,
+        domain: &ParsedDomain,
         query_type: RecordType,
     ) -> Result<Lookup, NetError> {
+        // Use the wire-parsed name directly: re-parsing the canonical string
+        // through `Name::from_utf8`/`Name::parse` would reject labels that
+        // contain an underscore after the first character (IDNA STD3), even
+        // though the wire name is valid.
+        let name = domain.as_dns_name();
         match self {
-            Self::Legacy(resolver) => resolver.lookup(domain, query_type).await,
+            Self::Unavailable => {
+                Err(NetError::from("no DNS servers configured for the active WAN"))
+            }
+            Self::Legacy(resolver) => resolver.lookup(name.clone(), query_type).await,
             #[cfg(feature = "pool-exp")]
-            Self::Pooled(resolver) => resolver.lookup(domain, query_type).await,
+            Self::Pooled(resolver) => resolver.lookup_name(name.clone(), query_type).await,
             #[cfg(feature = "pool-native")]
             Self::Native(pool) => {
-                let name = Name::parse(domain, None).map_err(NetError::from)?;
-                let query = Query::query(name, query_type);
-                match pool.lookup(domain, query_type).await {
+                let query = Query::query(name.clone(), query_type);
+                match pool.lookup_name(name.clone(), query_type).await {
                     Ok(answer) => {
                         // A truncated answer is served as-is (matching the
                         // legacy/exp behaviour); the TC-bit passthrough to
                         // the client rides on the RFC 2308 semantics port.
                         if answer.truncated {
                             tracing::debug!(
-                                "upstream answer for {domain} was truncated; serving \
-                                 partial records"
+                                "upstream answer for {} was truncated; serving \
+                                 partial records",
+                                domain.raw()
                             );
                         }
                         let min_ttl =
@@ -109,6 +120,7 @@ fn map_native_error(query: Query, err: native::UpstreamError) -> NetError {
 impl fmt::Debug for LandscapeResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unavailable => f.write_str("Unavailable WAN DNS"),
             Self::Legacy(resolver) => fmt::Debug::fmt(resolver, f),
             #[cfg(feature = "pool-exp")]
             Self::Pooled(resolver) => fmt::Debug::fmt(resolver, f),
@@ -121,10 +133,19 @@ impl fmt::Debug for LandscapeResolver {
 pub(crate) fn create_resolver(
     flow_id: u32,
     mark_value: u32,
-    config: DnsUpstreamConfig,
+    mut config: DnsUpstreamConfig,
 ) -> Option<LandscapeResolver> {
+    if !config.bind_config.wan_servers.is_empty() {
+        config.ips = config.bind_config.server_ips(&config.ips);
+        if config.ips.is_empty() {
+            tracing::warn!(flow_id, upstream_id = %config.id, "no DNS servers for active WAN; failing closed");
+            return Some(LandscapeResolver::Unavailable);
+        }
+    }
     // Opt-in gate: only explicitly opted-in upstreams use the self-managed pool.
-    if config.use_experimental_pool.unwrap_or(false) {
+    if config.use_experimental_pool.unwrap_or(false)
+        && (cfg!(feature = "pool-native") || config.bind_config.follow_flow.is_none())
+    {
         #[cfg(feature = "pool-native")]
         {
             let provider =

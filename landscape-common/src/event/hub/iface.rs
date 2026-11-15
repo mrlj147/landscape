@@ -2,7 +2,11 @@ use tokio::sync::{broadcast, mpsc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IfaceObserverAction {
+    /// Admin state changed to up (`IFF_UP`).
     Up(String),
+    /// Admin state changed to down, or the link was deleted.
+    ///
+    /// Cable removal does not produce this event.
     Down(String),
 }
 

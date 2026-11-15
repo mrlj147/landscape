@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "landscape"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2931,6 +2931,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "toml",
@@ -2938,7 +2939,9 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "uuid",
+ "webpki-roots 1.0.9",
  "wl-nl80211",
  "x509-parser 0.18.1",
  "zbus",
@@ -2946,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-common"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2965,6 +2968,7 @@ dependencies = [
  "libc",
  "md-5 0.11.0",
  "once_cell",
+ "regex",
  "sea-orm",
  "serde",
  "serde_json",
@@ -2976,6 +2980,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "url",
  "utoipa",
  "uuid",
  "zerocopy",
@@ -2983,7 +2988,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-core"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "ahash 0.8.12",
  "aho-corasick",
@@ -3013,7 +3018,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-database"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "async-trait",
  "landscape-common",
@@ -3030,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-dns"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3073,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-ebpf"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3081,6 +3086,7 @@ dependencies = [
  "etherparse",
  "futures",
  "landscape-common",
+ "landscape-core",
  "libbpf-cargo",
  "libbpf-rs",
  "libbpf-sys",
@@ -3099,13 +3105,14 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uuid",
  "vmlinux",
  "zerocopy",
 ]
 
 [[package]]
 name = "landscape-gateway"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3124,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-macro"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3136,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-metric"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -3156,11 +3163,12 @@ dependencies = [
 
 [[package]]
 name = "landscape-protobuf"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "landscape-common",
  "pb-rs",
  "quick-protobuf",
+ "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -3171,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "landscape-webserver"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3425,7 +3433,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.28.0"
+version = "0.28.2"
 dependencies = [
  "sea-orm-migration",
  "serde_json",

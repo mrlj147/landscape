@@ -21,7 +21,9 @@ use tokio_util::task::TaskTracker;
 use crate::{
     CheckChainDnsResult, CheckDnsReq, convert_record_type,
     domain::ParsedDomain,
-    listener::{DohListenerState, EffectiveDohListenerConfig, start_flow_dns_listener},
+    listener::{
+        DohListenerState, EffectiveDohListenerConfig, FlowListenerPlan, start_flow_dns_listener,
+    },
     mdns::MdnsService,
     resolve::{
         DohAdvertiseProvider, LocalDnsAnswerProvider, engine::ResolveEngine, local::LocalResolver,
@@ -60,6 +62,8 @@ pub struct LandscapeDnsServer {
     pub msg_tx: MetricSenderState,
     // bound UDP DNS listen address
     pub udp_listener_addr: SocketAddr,
+    // plain DNS-over-TCP enabled for this process
+    tcp_enabled: bool,
     cache_live_config: Arc<ArcSwap<CacheRuntimeConfig>>,
     doh_listener: Option<DohListenerState>,
     _mdns_service: Option<Arc<MdnsService>>,
@@ -76,6 +80,8 @@ pub enum FlowRuntimeRefreshKind {
 
 pub struct DnsServiceDeps {
     pub listen_port: u16,
+    /// Serve plain DNS over TCP on `listen_port` next to DNS/UDP.
+    pub tcp_enabled: bool,
     pub msg_tx: Option<mpsc::Sender<DnsMetricEvent>>,
     pub cache_runtime: CacheRuntimeConfig,
     pub doh: Option<EffectiveDohListenerConfig>,
@@ -91,6 +97,7 @@ impl LandscapeDnsServer {
     pub fn new(deps: DnsServiceDeps) -> Self {
         let DnsServiceDeps {
             listen_port,
+            tcp_enabled,
             msg_tx,
             cache_runtime,
             doh,
@@ -128,6 +135,7 @@ impl LandscapeDnsServer {
                 0,
                 0,
             )),
+            tcp_enabled,
             msg_tx: Arc::new(ArcSwapOption::from(msg_tx.map(Arc::new))),
             cache_live_config: Arc::new(ArcSwap::from_pointee(cache_runtime)),
             doh_listener,
@@ -403,14 +411,23 @@ impl LandscapeDnsServer {
         });
         if let Some(handler) = handler {
             let Ok(domain) = req.get_domain() else {
-                return CheckChainDnsResult::default();
+                return CheckChainDnsResult {
+                    error: Some(landscape_common::dns::check::DnsCheckError::InvalidDomain),
+                    ..Default::default()
+                };
             };
             let Ok(pd) = ParsedDomain::new(&domain) else {
-                return CheckChainDnsResult::default();
+                return CheckChainDnsResult {
+                    error: Some(landscape_common::dns::check::DnsCheckError::InvalidDomain),
+                    ..Default::default()
+                };
             };
             handler.check_domain(&pd, convert_record_type(req.record_type), req.apply_filter).await
         } else {
-            CheckChainDnsResult::default()
+            CheckChainDnsResult {
+                error: Some(landscape_common::dns::check::DnsCheckError::FlowUnavailable),
+                ..Default::default()
+            }
         }
     }
 
@@ -486,7 +503,10 @@ impl LandscapeDnsServer {
         start_flow_dns_listener(
             flow_id,
             self.udp_listener_addr,
-            self.build_effective_doh_listener_config(),
+            FlowListenerPlan {
+                tcp_enabled: self.tcp_enabled,
+                doh: self.build_effective_doh_listener_config(),
+            },
             handler,
             self.socket_registrar.clone(),
             token.clone(),
@@ -581,6 +601,7 @@ mod tests {
     fn test_dns_server() -> LandscapeDnsServer {
         let mut server = LandscapeDnsServer::new(DnsServiceDeps {
             listen_port: 53,
+            tcp_enabled: false,
             msg_tx: None,
             cache_runtime: test_cache_runtime_config(),
             doh: None,
@@ -606,6 +627,34 @@ mod tests {
                 FlowRuntimeRefreshKind::Full,
             )
             .await;
+    }
+
+    #[test]
+    fn check_domain_reports_missing_flow_invalid_domain_and_missing_rule() {
+        use landscape_common::dns::{check::DnsCheckError, rule::LandscapeDnsRecordType};
+        run_async_test(async {
+            let server = test_dns_server();
+            let request = |domain: &str| CheckDnsReq {
+                flow_id: 7,
+                domain: domain.into(),
+                record_type: LandscapeDnsRecordType::A,
+                apply_filter: false,
+            };
+            assert_eq!(
+                server.check_domain(request("example.com")).await.error,
+                Some(DnsCheckError::FlowUnavailable)
+            );
+            refresh_full(&server, 7).await;
+            assert_eq!(
+                server.check_domain(request("..")).await.error,
+                Some(DnsCheckError::InvalidDomain)
+            );
+            assert_eq!(
+                server.check_domain(request("example.com")).await.error,
+                Some(DnsCheckError::NoMatchingRule)
+            );
+            server.stop_service().await;
+        });
     }
 
     #[test]

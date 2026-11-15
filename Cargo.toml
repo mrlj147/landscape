@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.28.0"
+version = "0.28.2"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/ThisSeanZhang/landscape"
@@ -99,6 +99,7 @@ pnet = { version = "0.35.0" }
 etherparse = "0.21.0"
 cidr = { version = "0.3.2" }
 idna = "1.1.0"
+url = "2.5.8"
 dhcproto = "0.15.0"
 reqwest = { version = "0.13.5", default-features = false, features = [
     "rustls",
@@ -230,4 +231,17 @@ panic = "abort"
 strip = "symbols"
 debug = false
 incremental = false
+overflow-checks = false
+
+# Fast local validation profile: skip size optimizations to minimize compile time.
+[profile.fast]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 256
+panic = "unwind"
+strip = false
+debug = false
+debug-assertions = false
+incremental = true
 overflow-checks = false
