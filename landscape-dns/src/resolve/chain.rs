@@ -11,6 +11,7 @@ use hickory_proto::{
     },
 };
 use landscape_common::{
+    dns::check::DnsCheckError,
     dns::error::{DnsResult, DnsServiceError},
     dns::rule::FilterResult,
     metric::dns::DnsOutcome,
@@ -86,10 +87,26 @@ impl<'a> ResolveChain<'a> {
         resolver: &DNSResolveRuntime,
         policy: CacheWritePolicy,
     ) -> DnsAnswer {
-        let answer =
-            with_lookup_timeout(resolver.lookup_answer(domain, query_type), LOOKUP_TIMEOUT)
+        self.stage_rule_with_diagnostic(domain, query_type, resolver, policy).await.0
+    }
+
+    async fn stage_rule_with_diagnostic(
+        &self,
+        domain: &ParsedDomain,
+        query_type: RecordType,
+        resolver: &DNSResolveRuntime,
+        policy: CacheWritePolicy,
+    ) -> (DnsAnswer, Option<DnsCheckError>) {
+        let (answer, error) =
+            match with_lookup_timeout(resolver.lookup_answer(domain, query_type), LOOKUP_TIMEOUT)
                 .await
-                .unwrap_or_else(|_| DnsAnswer::new(vec![], ResponseCode::ServFail));
+            {
+                Ok(answer) => (answer, None),
+                Err(err) => (
+                    DnsAnswer::new(vec![], ResponseCode::ServFail),
+                    Some(dns_check_error_from_lookup(&err)),
+                ),
+            };
 
         match policy {
             CacheWritePolicy::Write { query_filtered: true } => {
@@ -108,7 +125,7 @@ impl<'a> ResolveChain<'a> {
             }
             _ => {}
         }
-        answer
+        (answer, error)
     }
 
     // ---- entry points ----
@@ -220,12 +237,24 @@ impl<'a> ResolveChain<'a> {
             } else {
                 // Read-only: no cache writes here, the cache report below
                 // shows what a client would currently see.
-                let answer =
-                    self.stage_rule(domain, query_type, resolver, CacheWritePolicy::ReadOnly).await;
-                // NXDOMAIN can carry the CNAME chain leading to the missing target.
-                if answer.response_code == ResponseCode::NoError
-                    || (answer.response_code == ResponseCode::NXDomain
-                        && !answer.records.is_empty())
+                let (answer, lookup_error) = self
+                    .stage_rule_with_diagnostic(
+                        domain,
+                        query_type,
+                        resolver,
+                        CacheWritePolicy::ReadOnly,
+                    )
+                    .await;
+                result.response_code = Some(answer.response_code.into());
+                result.error = lookup_error.or_else(|| match answer.response_code {
+                    ResponseCode::NoError | ResponseCode::NXDomain => None,
+                    _ => Some(DnsCheckError::UpstreamResponse),
+                });
+                if result.error.is_none()
+                    && matches!(
+                        answer.response_code,
+                        ResponseCode::NoError | ResponseCode::NXDomain
+                    )
                 {
                     result.records = Some(report_records(
                         answer.records,
@@ -234,6 +263,10 @@ impl<'a> ResolveChain<'a> {
                     ));
                 }
             }
+        }
+
+        if result.redirect_id.is_none() && result.rule_id.is_none() {
+            result.error = Some(DnsCheckError::NoMatchingRule);
         }
 
         // (4) Cache report
@@ -305,16 +338,29 @@ impl<'a> ResolveChain<'a> {
             ..Default::default()
         };
 
-        let answer = self
-            .stage_rule(domain, query_type, resolver, CacheWritePolicy::Write { query_filtered })
+        let (answer, lookup_error) = self
+            .stage_rule_with_diagnostic(
+                domain,
+                query_type,
+                resolver,
+                CacheWritePolicy::Write { query_filtered },
+            )
             .await;
-        result.records = Some(match answer.response_code {
-            ResponseCode::NoError | ResponseCode::NXDomain => {
-                report_records(answer.records, query_type, apply_filter.then_some(&filter))
-            }
-            _ if query_filtered => vec![],
-            _ => return Err(DnsServiceError::RefreshFailed(domain.raw().to_string())),
+        result.response_code = Some(answer.response_code.into());
+        result.error = lookup_error.or_else(|| match answer.response_code {
+            ResponseCode::NoError | ResponseCode::NXDomain => None,
+            _ => Some(DnsCheckError::UpstreamResponse),
         });
+        if result.error.is_some() {
+            if query_filtered {
+                result.records = Some(vec![]);
+            } else {
+                return Err(DnsServiceError::RefreshFailed(domain.raw().to_string()));
+            }
+        } else {
+            result.records =
+                Some(report_records(answer.records, query_type, apply_filter.then_some(&filter)));
+        }
 
         self.runtime.cache.refresh_marks();
 
@@ -359,6 +405,15 @@ impl<'a> ResolveChain<'a> {
         if self.runtime.cache.invalidate_if_present(domain, query_type).await {
             self.runtime.cache.refresh_marks();
         }
+    }
+}
+
+fn dns_check_error_from_lookup(error: &DnsServiceError) -> DnsCheckError {
+    match error {
+        DnsServiceError::Timeout => DnsCheckError::UpstreamTimeout,
+        DnsServiceError::Io(_) => DnsCheckError::UpstreamNetwork,
+        DnsServiceError::Protocol(_) => DnsCheckError::UpstreamResponse,
+        _ => DnsCheckError::UpstreamFailure,
     }
 }
 

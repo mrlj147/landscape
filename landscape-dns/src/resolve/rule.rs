@@ -137,7 +137,6 @@ pub struct DNSResolveRuntime {
     resolver: Arc<LandscapeResolver>,
 
     enable_ip_validation: bool,
-    wan_following: bool,
 }
 
 impl DNSResolveRuntime {
@@ -156,7 +155,6 @@ impl DNSResolveRuntime {
         let _ = span.enter();
 
         let enable_ip_validation = upstream.enable_ip_validation.unwrap_or(false);
-        let wan_following = upstream.bind_config.follow_flow.is_some();
         let dns_mark = SocketMark::get_dns_mark(mark_config, flow_id);
         let Some(resolver) = pool.get_or_create(flow_id, dns_mark, &upstream) else {
             tracing::warn!(rule_id = %rule_id, flow_id = flow_id, "skip DNS rule: failed to build resolver");
@@ -173,19 +171,16 @@ impl DNSResolveRuntime {
             resolver,
             mark,
             enable_ip_validation,
-            wan_following,
         })
     }
 
-    /// Carrier/CDN answers from the previous WAN must not survive a transport
-    /// change: unless neither side follows the WAN, the resolver must be the
-    /// same instance.
+    /// Answers are reusable only while the winning rule and upstream resolver
+    /// are unchanged. Carrier WAN changes create a new resolver instance.
     pub(crate) fn can_reuse_answers_with(&self, next: &Self) -> bool {
         self.rule_id == next.rule_id
             && self.filter == next.filter
             && self.enable_ip_validation == next.enable_ip_validation
-            && ((!self.wan_following && !next.wan_following)
-                || Arc::ptr_eq(&self.resolver, &next.resolver))
+            && Arc::ptr_eq(&self.resolver, &next.resolver)
     }
 
     pub fn mark(&self) -> &DnsRuntimeMarkInfo {
