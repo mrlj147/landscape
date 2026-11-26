@@ -39,7 +39,7 @@ impl ResolvePool {
         if let Some(resolver) =
             self.resolvers.read().unwrap_or_else(|e| e.into_inner()).get(&key).and_then(
                 |(binding, resolver)| {
-                    (binding == &upstream.bind_config).then(|| Weak::upgrade(resolver)).flatten()
+                    if binding == &upstream.bind_config { Weak::upgrade(resolver) } else { None }
                 },
             )
         {
@@ -48,7 +48,7 @@ impl ResolvePool {
 
         let mut resolvers = self.resolvers.write().unwrap_or_else(|e| e.into_inner());
         if let Some(resolver) = resolvers.get(&key).and_then(|(binding, resolver)| {
-            (binding == &upstream.bind_config).then(|| Weak::upgrade(resolver)).flatten()
+            if binding == &upstream.bind_config { Weak::upgrade(resolver) } else { None }
         }) {
             return Some(resolver);
         }

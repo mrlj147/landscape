@@ -24,6 +24,8 @@ static __always_inline int tc_nat_v6_egress_do(struct __sk_buff *skb, u32 ifinde
     __be16 dport = 0;
     int ret = 0;
 
+    if (is_skip_route_and_stage(skb_mark(skb))) return TC_ACT_OK;
+
     if (!tc_nat_read6(skb, current_l3_offset, LAND_FRAG_FROM_LAN, &off, &src_addr, &dst_addr,
                       &sport, &dport))
         return TC_ACT_OK;
@@ -46,6 +48,8 @@ static __always_inline int tc_nat_v6_ingress_do(struct __sk_buff *skb, u32 ifind
     __be16 sport = 0;
     __be16 dport = 0;
     int ret = 0;
+
+    if (is_skip_route_and_stage(skb_mark(skb))) return TC_ACT_OK;
 
     if (!tc_nat_read6(skb, current_l3_offset, LAND_FRAG_FROM_WAN, &off, &src_addr, &dst_addr,
                       &sport, &dport))
