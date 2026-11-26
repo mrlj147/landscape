@@ -179,7 +179,7 @@ impl crate::database::validator::ValidatableConfig for FlowConfig {
                 ),
             });
         }
-if self.flow_id > MAX_FLOW_ID {
+        if self.flow_id > MAX_FLOW_ID {
             return Err(ServiceConfigError::FlowIdOutOfRange { flow_id: self.flow_id });
         }
         if (self.failover.bind_default_flow && !self.failover.ordered_targets())

@@ -21,7 +21,7 @@ type ResolverKey = (u32, Uuid);
 /// removing the last rule releases its connections once in-flight queries finish.
 #[derive(Debug, Default)]
 pub struct ResolvePool {
-resolvers: RwLock<HashMap<ResolverKey, (DnsBindConfig, Weak<LandscapeResolver>)>>,
+    resolvers: RwLock<HashMap<ResolverKey, (DnsBindConfig, Weak<LandscapeResolver>)>>,
 }
 
 impl ResolvePool {
@@ -36,14 +36,12 @@ impl ResolvePool {
     ) -> Option<Arc<LandscapeResolver>> {
         let dns_mark = upstream.bind_config.socket_mark(dns_mark);
         let key = (dns_mark, upstream.id);
-if let Some(resolver) = self
-            .resolvers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .and_then(|(binding, resolver)| {
-                (binding == &upstream.bind_config).then(|| Weak::upgrade(resolver)).flatten()
-            })
+        if let Some(resolver) =
+            self.resolvers.read().unwrap_or_else(|e| e.into_inner()).get(&key).and_then(
+                |(binding, resolver)| {
+                    (binding == &upstream.bind_config).then(|| Weak::upgrade(resolver)).flatten()
+                },
+            )
         {
             return Some(resolver);
         }

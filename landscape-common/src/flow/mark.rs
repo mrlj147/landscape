@@ -46,7 +46,7 @@ pub struct SocketMark {
 pub enum MarkType {
     /// tag = 0: bits 0-15 are the standard FlowMark layout
     Normal(FlowMark),
-/// tag = 1: skip the route lookup and the policy stages. The chain id
+    /// tag = 1: skip the route lookup and the policy stages. The chain id
     /// occupies bits 0-15. This is the legacy HostDirect layout.
     SkipRouteAndStage { chain_id: u16 },
     /// tag = 2: skip only the route lookup; the policy stages still run.
@@ -168,7 +168,7 @@ impl From<FlowMark> for u32 {
 impl From<u32> for SocketMark {
     fn from(value: u32) -> Self {
         let trace_mark = ((value & TRACE_MARK_MASK) >> 16) as u8;
-// Unknown tags fall back to Normal, matching FlowMarkAction's lenient
+        // Unknown tags fall back to Normal, matching FlowMarkAction's lenient
         // style.
         let mark_type = match (value & MARK_TYPE_MASK) >> 24 {
             MARK_TYPE_SKIP_ROUTE_AND_STAGE => {
@@ -193,7 +193,7 @@ impl From<SocketMark> for u32 {
             MarkType::SkipRouteAndStage { chain_id } => {
                 raw | (MARK_TYPE_SKIP_ROUTE_AND_STAGE << 24) | chain_id as u32
             }
-MarkType::SkipRoute { chain_id } => {
+            MarkType::SkipRoute { chain_id } => {
                 raw | (MARK_TYPE_SKIP_ROUTE << 24) | chain_id as u32
             }
             MarkType::SkipAll { chain_id } => raw | (MARK_TYPE_SKIP_ALL << 24) | chain_id as u32,
@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-fn test_socket_mark_host_probe_roundtrip() {
+    fn test_socket_mark_host_probe_roundtrip() {
         let sm = SocketMark::new(MarkType::HostProbe { chain_id: 7 }, 0x56);
         assert_eq!(u32::from(sm), 0x0456_0007);
         assert_eq!(SocketMark::from(0x0456_0007), sm);
@@ -360,7 +360,7 @@ fn test_socket_mark_host_probe_roundtrip() {
 
     #[test]
     fn test_socket_mark_unknown_tag_falls_back_to_normal() {
-// tag = 5 is undefined -> fall back to the Normal layout, decoding
+        // tag = 5 is undefined -> fall back to the Normal layout, decoding
         // the low 16 bits
         let sm = SocketMark::from(0x0500_0305);
         assert_eq!(

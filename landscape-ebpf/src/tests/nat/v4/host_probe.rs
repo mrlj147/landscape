@@ -51,7 +51,7 @@ fn routed(nat: &ProgramMut<'_>, packet: &[u8], probe: bool) -> (i32, Vec<u8>) {
     let kind = if probe {
         MarkType::HostProbe { chain_id: CHAIN }
     } else {
-        MarkType::HostDirect { chain_id: CHAIN }
+        MarkType::SkipRouteAndStage { chain_id: CHAIN }
     };
     run_marked(&route.progs.tc_wan_egress_route, packet, SocketMark::new(kind, 0).into())
 }

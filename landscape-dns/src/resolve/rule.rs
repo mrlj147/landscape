@@ -177,7 +177,7 @@ impl DNSResolveRuntime {
         })
     }
 
-/// Carrier/CDN answers from the previous WAN must not survive a transport
+    /// Carrier/CDN answers from the previous WAN must not survive a transport
     /// change: unless neither side follows the WAN, the resolver must be the
     /// same instance.
     pub(crate) fn can_reuse_answers_with(&self, next: &Self) -> bool {
@@ -214,7 +214,7 @@ impl DNSResolveRuntime {
         self.matcher.is_match(domain)
     }
 
-pub async fn lookup(
+    pub async fn lookup(
         &self,
         domain: &ParsedDomain,
         query_type: RecordType,

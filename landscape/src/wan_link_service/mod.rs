@@ -1077,7 +1077,7 @@ impl ConfigStoreServiceController for WanLinkServiceManagerService {
         &self,
         id: Self::Id,
     ) -> Result<Option<ServiceStatus>, DbError> {
-let service = self.clone();
+        let service = self.clone();
         spawn_task_with_resource(task_label::task::WAN_LINK_CONFIG, id, async move {
             let _delete = service.config_gate.write().await;
             let Some(old) = service.get_store().delete_and_get(id).await? else { return Ok(None) };

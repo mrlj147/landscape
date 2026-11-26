@@ -52,7 +52,7 @@ impl LandscapeResolver {
         // Reuse the wire name so valid DNS labels containing underscores survive IDNA parsing.
         let name = domain.as_dns_name().clone();
         match self {
-Self::Unavailable => {
+            Self::Unavailable => {
                 Err(NetError::from("no DNS servers configured for the active WAN"))
             }
             Self::Legacy(resolver) => match resolver.lookup(name, query_type).await {

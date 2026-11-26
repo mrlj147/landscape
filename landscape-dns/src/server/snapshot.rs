@@ -192,7 +192,7 @@ impl SnapshotStore {
             {
                 continue;
             }
-if let Some(resolver) = resolves.find_match(&pd) {
+            if let Some(resolver) = resolves.find_match(&pd) {
                 // Reuse only data obtained under the winning rule and upstream.
                 let old = cache_item
                     .matched_rule_order
