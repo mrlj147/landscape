@@ -547,7 +547,6 @@ static __always_inline int xdp_route4_search_cache_in_lan(struct xdp_md *ctx,
         struct route4_cache_value *target = bpf_map_lookup_elem(lan_cache, &search_key);
         if (target && target->ifindex != 0 &&
             !route_policy(get_flow_id(target->mark_value), false)) {
-            *flow_mark = target->mark_value;
             if (target->is_docker) {
                 xdp_set_docker_meta(ctx, target->mark_value, target->ifindex);
                 return XDP_PASS;
