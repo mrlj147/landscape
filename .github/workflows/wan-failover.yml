@@ -67,7 +67,11 @@ jobs:
       - run: cargo test --locked -p landscape-webserver export_openapi_json
       - name: Compile isolated network tests
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p landscape-ebpf --features test-route,test-chain,test-nat --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json"
+        run: |
+          cargo test --locked -p landscape-ebpf --features test-route,test-chain,test-nat --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-ebpf-build.json" || {
+            jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' "$RUNNER_TEMP/wan-ebpf-build.json" >&2
+            exit 1
+          }
       - name: Real WAN failover packets in netns/veth
         if: ${{ !cancelled() }}
         run: |
