@@ -248,7 +248,7 @@ impl<'a> ResolveChain<'a> {
                 if lookup_error.is_none() {
                     result.response_code = Some(answer.response_code.into());
                 }
-                result.error = lookup_error.or_else(|| match answer.response_code {
+                result.error = lookup_error.or(match answer.response_code {
                     ResponseCode::NoError | ResponseCode::NXDomain => None,
                     _ => Some(DnsCheckError::UpstreamResponse),
                 });
@@ -350,7 +350,7 @@ impl<'a> ResolveChain<'a> {
         if lookup_error.is_none() {
             result.response_code = Some(answer.response_code.into());
         }
-        result.error = lookup_error.or_else(|| match answer.response_code {
+        result.error = lookup_error.or(match answer.response_code {
             ResponseCode::NoError | ResponseCode::NXDomain => None,
             _ => Some(DnsCheckError::UpstreamResponse),
         });

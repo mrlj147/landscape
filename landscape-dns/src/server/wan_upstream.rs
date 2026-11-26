@@ -10,6 +10,7 @@ use landscape_common::dns::{
 };
 use uuid::Uuid;
 
+#[cfg(test)]
 use crate::domain::ParsedDomain;
 
 pub(super) fn select(
