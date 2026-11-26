@@ -481,6 +481,7 @@ mod tests {
             id: Uuid::nil(),
             enable: true,
             flow_id,
+            failover: Default::default(),
             flow_match_rules: vec![],
             flow_targets: vec![],
             name: String::new(),
