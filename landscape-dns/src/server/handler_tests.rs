@@ -462,17 +462,41 @@ mod tests {
                 for (action, error, code) in [
                     (ScriptedAction::HoldOpen, Some(DnsCheckError::UpstreamTimeout), None),
                     (
-                        ScriptedAction::EmptyCode(ResponseCode::Refused),
+                        ScriptedAction::Negative {
+                            code: ResponseCode::Refused,
+                            soa: None,
+                            alias_ttl: None,
+                        },
                         Some(DnsCheckError::UpstreamResponse),
                         Some(5),
                     ),
                     (
-                        ScriptedAction::EmptyCode(ResponseCode::ServFail),
+                        ScriptedAction::Negative {
+                            code: ResponseCode::ServFail,
+                            soa: None,
+                            alias_ttl: None,
+                        },
                         Some(DnsCheckError::UpstreamResponse),
                         Some(2),
                     ),
-                    (ScriptedAction::EmptyCode(ResponseCode::NXDomain), None, Some(3)),
-                    (ScriptedAction::EmptyCode(ResponseCode::NoError), None, Some(0)),
+                    (
+                        ScriptedAction::Negative {
+                            code: ResponseCode::NXDomain,
+                            soa: None,
+                            alias_ttl: None,
+                        },
+                        None,
+                        Some(3),
+                    ),
+                    (
+                        ScriptedAction::Negative {
+                            code: ResponseCode::NoError,
+                            soa: None,
+                            alias_ttl: None,
+                        },
+                        None,
+                        Some(0),
+                    ),
                 ] {
                     let mut upstream = ScriptedDnsServer::spawn("127.0.0.1".parse().unwrap()).await;
                     for _ in 0..32 {

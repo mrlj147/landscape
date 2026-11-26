@@ -10,6 +10,8 @@ use landscape_common::dns::{
 };
 use uuid::Uuid;
 
+use crate::domain::ParsedDomain;
+
 pub(super) fn select(
     rule: &DNSRuleConfig,
     upstreams: &HashMap<Uuid, DnsUpstreamConfig>,
@@ -226,6 +228,7 @@ mod packet_tests {
         let groups = HashMap::from([(a.id, a), (b.id, b)]);
         let pool = ResolvePool::default();
         let mut previous = None;
+        let domain = ParsedDomain::new("independent.test.").unwrap();
         for (link, answer, expected) in
             [(cu, "192.0.2.1", [1, 0]), (ct, "192.0.2.2", [1, 1]), (cu, "192.0.2.1", [2, 1])]
         {
@@ -241,12 +244,12 @@ mod packet_tests {
             }
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(3),
-                resolver.lookup("independent.test.", RecordType::A),
+                resolver.lookup(&domain, RecordType::A),
             )
             .await
             .unwrap()
             .unwrap();
-            assert!(result.answers().iter().any(|r| r.data.to_string() == answer));
+            assert!(result.records.iter().any(|r| r.data.to_string() == answer));
             assert_eq!(
                 [counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)],
                 expected
@@ -256,7 +259,7 @@ mod packet_tests {
         rule.resolved_wan = None;
         let resolver = pool.get_or_create(20, 0x8014, &select(&rule, &groups).unwrap()).unwrap();
         assert!(matches!(*resolver, LandscapeResolver::Unavailable));
-        assert!(resolver.lookup("independent.test.", RecordType::A).await.is_err());
+        assert!(resolver.lookup(&domain, RecordType::A).await.is_err());
         assert_eq!([counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)], [2, 1]);
         for task in tasks {
             task.abort();

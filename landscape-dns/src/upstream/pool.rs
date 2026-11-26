@@ -145,6 +145,7 @@ mod tests {
             ..Default::default()
         });
         let pool = ResolvePool::default();
+        let domain = crate::domain::ParsedDomain::new("example.test.").unwrap();
         for (link, expected, queries) in
             [(cu, "192.0.2.1", [1, 0]), (ct, "192.0.2.2", [1, 1]), (cu, "192.0.2.1", [2, 1])]
         {
@@ -152,12 +153,12 @@ mod tests {
             let resolver = pool.get_or_create(7, 0x8007, &upstream).unwrap();
             let answer = tokio::time::timeout(
                 std::time::Duration::from_secs(3),
-                resolver.lookup("example.test.", RecordType::A),
+                resolver.lookup(&domain, RecordType::A),
             )
             .await
             .unwrap()
             .unwrap();
-            assert!(answer.answers().iter().any(|record| record.data.to_string() == expected));
+            assert!(answer.records.iter().any(|record| record.data.to_string() == expected));
             assert_eq!(
                 [counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)],
                 queries
@@ -166,7 +167,7 @@ mod tests {
         upstream.bind_config.resolved_wan = None;
         let blocked = pool.get_or_create(7, 0x8007, &upstream).unwrap();
         assert!(matches!(*blocked, LandscapeResolver::Unavailable));
-        assert!(blocked.lookup("example.test.", RecordType::A).await.is_err());
+        assert!(blocked.lookup(&domain, RecordType::A).await.is_err());
         assert_eq!([counts[0].load(Ordering::SeqCst), counts[1].load(Ordering::SeqCst)], [2, 1]);
         for task in tasks {
             task.abort();
