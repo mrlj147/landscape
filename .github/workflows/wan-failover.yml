@@ -68,7 +68,7 @@ jobs:
           dns_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape_dns" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-service-build.json" | tail -1)
           sudo env LANDSCAPE_PRIVILEGED_CI=1 "$service_test_bin" wan_link_service::probe_netns_tests:: --ignored --test-threads=1 --nocapture
           sudo env LANDSCAPE_PRIVILEGED_CI=1 timeout 300 "$dns_test_bin" --test-threads=2
-      - run: cargo test --locked -p landscape-webserver export_openapi_json
+      - run: cargo test --locked -p landscape-webserver export_openapi_json -- --ignored --nocapture
       - name: Compile isolated network tests
         if: ${{ !cancelled() }}
         run: |
