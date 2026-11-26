@@ -12,7 +12,6 @@ export default {
     priority: "Priority",
     remark: "Remark",
     filter_result: "Filter result",
-    flow_action: "Flow action",
     upstream_select: "DNS upstream",
     source_rules_title:
       "Domain match rules (empty means match all, rule order is ignored)",
@@ -108,7 +107,10 @@ export default {
     request_mode: "Upstream request mode",
     type_plaintext: "Plaintext",
     port: "Port",
-    port_placeholder: "Used in DNS rule selection",
+    unusual_port:
+      "{protocol} usually uses port {usual}. Confirm that your upstream serves {protocol} on port {port}.",
+    confirm_port: "Confirm upstream port",
+    save_custom_port: "Save with this port",
     domain: "Domain",
     domain_placeholder: "Do not include https:// or trailing /dns-query",
     url: "URL",
@@ -138,10 +140,10 @@ export default {
     confirm_delete: "Confirm deletion?",
   },
   rule_card: {
-    traffic_action: "Traffic Action",
-    upstream_config: "DNS Upstream Config",
+    answer_filter: "Answer filter",
+    upstream_config: "Upstream",
     match_rules: "Match Rules",
-    no_match_rules: "No match rules. All domains will match.",
+    no_match_rules: "Matches all domains",
   },
   rule_drawer: {
     title_default: "Edit Default DNS Rules",
@@ -152,6 +154,14 @@ export default {
     confirm_import: "Confirm import from clipboard?",
   },
   check_domain: {
+    matched_rule: "Matched DNS rule",
+    matched_redirect: "Matched redirect rule",
+    baidu: "Baidu",
+    ustc: "USTC",
+    run_query: "Run DNS query",
+    query_result: "DNS Query Results",
+    no_records: "No records returned",
+    cache_miss: "No cache entry",
     error_upstream_timeout:
       "Upstream DNS lookup timed out. Check reachability through this Flow or add a DNS server reachable through that WAN. Cached records do not indicate success for this lookup.",
     error_upstream_network:
@@ -169,7 +179,6 @@ export default {
     no_data:
       "The lookup succeeded but returned no records of this type (NODATA).",
     response_code: "DNS response code: {code}",
-
     enter_domain: "Enter domain to query",
     test_flow_query: "Test flow: {flow_id} domain query (results not cached)",
     query_instruction:
@@ -177,11 +186,10 @@ export default {
     diagnostic_hint:
       "Regular query is diagnostic only and does not write runtime cache",
     delete_cache: "Delete Cache",
-    refresh_cache: "Refresh Cache",
-    confirm_delete_cache:
-      "Delete the current cache entry for this domain and record type?",
+    refresh_cache: "Force refresh cache",
+    confirm_delete_cache: "Delete the cache entry for this query result?",
     confirm_refresh_cache:
-      "Refresh this domain and record type from upstream and overwrite runtime cache?",
+      "Query upstream again and overwrite the cache entry for this result?",
     delete_cache_success: "DNS cache entry deleted",
     refresh_cache_success: "DNS cache refreshed from upstream",
     query_filtered_hint:

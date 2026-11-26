@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { get_all_wan_links } from "@/api/service_wan_link";
+import { get_all_wan_links } from "@/api/services/wan_link";
 import { get_dns_upstreams } from "@/api/dns_rule/upstream";
 import type { DnsWanUpstream } from "@landscape-router/types/api/schemas";
 

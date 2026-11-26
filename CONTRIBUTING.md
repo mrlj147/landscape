@@ -49,7 +49,7 @@ This runs all three formatters (Rust, C/eBPF, Frontend). You can also format onl
 
 ```bash
 ./fmt.sh --rust      # cargo fmt
-./fmt.sh --c         # clang-format-18
+./fmt.sh --c         # clang-format-19
 ./fmt.sh --frontend  # prettier
 ```
 
@@ -61,6 +61,8 @@ cargo test -p landscape-ebpf --features bpf-test   # eBPF integration tests (req
 pnpm --filter landscape-webui run format:check
 pnpm --filter landscape-webui build
 ```
+
+For changes affecting network behavior or the lab, run the relevant Containerlab cases. [E2E test selection](tests/e2e/containerlab/README.md#按改动范围选择用例)
 
 ## Code Conventions
 
@@ -79,7 +81,7 @@ pnpm --filter landscape-webui build
 
 ### C / eBPF
 
-- Format with `./fmt.sh --c` or `clang-format-18`. The project uses [`.clang-format`](./.clang-format).
+- Format with `./fmt.sh --c` or `clang-format-19`. The project uses [`.clang-format`](./.clang-format).
 - eBPF programs live under `landscape-ebpf/src/bpf/`. Do not format the generated `vmlinux.h`.
 - Keep BPF programs compatible with the kernel versions documented in [BUILD.md](./BUILD.md).
 

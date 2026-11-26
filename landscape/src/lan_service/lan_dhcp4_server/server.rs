@@ -12,7 +12,7 @@ use landscape_common::net_proto::udp::dhcp::{
     v4_helpers::get_hostname, v4_helpers::has_option,
 };
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use cidr::Ipv4Inet;
 #[cfg(test)]
 use landscape_common::config_service::enrolled_device::EnrolledDevice;
@@ -26,7 +26,7 @@ use landscape_common::lan_service::lan_dhcpv4::config::{
 };
 use landscape_common::lan_service::mac_binding::MacBindingDataplane;
 use landscape_common::net::MacAddr;
-use landscape_common::sys_service::lan_hostname::LanHostnameConfig;
+use landscape_common::sys_config::{DohRuntimeConfig, LanHostnameRuntimeConfig};
 
 use crate::lan_service::lan_dhcp4_server::status::DhcpV4AssignStatus;
 use landscape_common::service::{ServiceHandle, ServiceStatus};
@@ -295,16 +295,7 @@ async fn handle_dhcp_message(
                         .ok();
                 }
 
-                let addr = if payload.flags().broadcast() {
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)), 68)
-                } else {
-                    let ip = if payload.ciaddr().is_unspecified() {
-                        IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255))
-                    } else {
-                        IpAddr::V4(payload.ciaddr())
-                    };
-                    SocketAddr::new(ip, msg_addr.port())
-                };
+                let addr = ack_dest(&payload, &dhcp, dhcp_server.server_ip, msg_addr);
 
                 let payload = encode_dhcpv4(&payload);
 
@@ -385,15 +376,51 @@ async fn handle_dhcp_message(
     false
 }
 
+/// Destination of the DHCPACK/DHCPNAK sent in reply to a DHCPREQUEST.
+///
+/// RFC 2131 §4.1: broadcast when the client set the broadcast flag, or when
+/// `ciaddr` is unspecified; otherwise unicast to `ciaddr`.
+///
+/// Compatibility exception: some embedded clients stay in SELECTING while
+/// sending a REQUEST that already carries the offered address in `ciaddr`
+/// (option 54 + option 50 present, broadcast flag clear). The address is not
+/// configured yet and the client cannot answer ARP for it, so a unicast ACK
+/// is dropped by neighbour resolution. Only that exact request shape is sent
+/// to the broadcast address; normal RENEWING/REBINDING keeps unicast ACKs.
+fn ack_dest(
+    reply: &DhcpV4Message,
+    request: &DhcpV4Message,
+    server_ip: Ipv4Addr,
+    msg_addr: SocketAddr,
+) -> SocketAddr {
+    let broadcast = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)), 68);
+
+    if reply.flags().broadcast() || reply.ciaddr().is_unspecified() {
+        return broadcast;
+    }
+
+    let selecting_for_this_server =
+        matches!(
+            has_option(request, 54),
+            Some(DhcpV4Option::ServerIdentifier(id)) if id == server_ip
+        ) && matches!(has_option(request, 50), Some(DhcpV4Option::RequestedIpAddress(_)));
+    if selecting_for_this_server
+        && !request.ciaddr().is_unspecified()
+        && reply.ciaddr() == reply.yiaddr()
+    {
+        return broadcast;
+    }
+
+    SocketAddr::new(IpAddr::V4(reply.ciaddr()), msg_addr.port())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DhcpV4DnrRuntimeContext {
     /// Certificate/SNI domains are shared with the TLS resolver and hot-reload
     /// into DHCP DNR responses without restarting the DHCP service.
     pub local_domains: Arc<ArcSwap<Vec<String>>>,
-    /// DoH endpoint is a startup snapshot; changing port/path requires a
-    /// process restart so DHCP advertisements match the active DoH listener.
-    pub doh_port: u16,
-    pub doh_path: String,
+    /// Published by DNS once its active listeners can serve the endpoint.
+    pub endpoint: Arc<ArcSwapOption<DohRuntimeConfig>>,
 }
 
 pub struct DHCPv4Server {
@@ -405,7 +432,7 @@ pub struct DHCPv4Server {
     /// Live hostname-registry config; the LAN suffix it holds is advertised as
     /// option 15/119 and is re-read per response so a config edit applies
     /// without restarting the DHCP service.
-    pub lan_domain_state: Option<Arc<ArcSwap<LanHostnameConfig>>>,
+    pub lan_domain_state: Option<Arc<ArcSwap<LanHostnameRuntimeConfig>>>,
     pub address_lease_time: u32,
     pub iface_name: String,
     status: Arc<Mutex<DhcpV4AssignStatus>>,
@@ -415,7 +442,7 @@ impl DHCPv4Server {
     pub fn new(
         config: DHCPv4ServerConfig,
         dnr_context: Option<DhcpV4DnrRuntimeContext>,
-        lan_domain_state: Option<Arc<ArcSwap<LanHostnameConfig>>>,
+        lan_domain_state: Option<Arc<ArcSwap<LanHostnameRuntimeConfig>>>,
         status: Arc<Mutex<DhcpV4AssignStatus>>,
         iface_name: String,
     ) -> Self {
@@ -544,7 +571,7 @@ impl DHCPv4Server {
     #[cfg(test)]
     fn init_with_lan_suffix(config: DHCPv4ServerConfig, lan_suffix: &str) -> Self {
         let status = Arc::new(Mutex::new(DhcpV4AssignStatus::init_for_test(config.clone())));
-        let lan_domain_state = Arc::new(ArcSwap::from_pointee(LanHostnameConfig {
+        let lan_domain_state = Arc::new(ArcSwap::from_pointee(LanHostnameRuntimeConfig {
             enable: true,
             lan_suffix: lan_suffix.to_string(),
         }));
@@ -661,13 +688,19 @@ fn encode_custom_option_with_defaults(
         return Ok(None);
     };
 
+    let endpoint = context.endpoint.load_full();
     let (domains, ips, port, doh_path) = match config {
-        DhcpV4DnrOptionConfig::Local => (
-            context.local_domains.load().as_ref().clone(),
-            vec![server_ip],
-            context.doh_port,
-            context.doh_path.clone(),
-        ),
+        DhcpV4DnrOptionConfig::Local => {
+            let Some(endpoint) = endpoint else {
+                return Ok(None);
+            };
+            (
+                context.local_domains.load().as_ref().clone(),
+                vec![server_ip],
+                endpoint.listen_port,
+                endpoint.http_endpoint.clone(),
+            )
+        }
         DhcpV4DnrOptionConfig::Custom { domains, ips, port, doh_path } => {
             let domains = if domains.is_empty() {
                 context.local_domains.load().as_ref().clone()
@@ -675,8 +708,14 @@ fn encode_custom_option_with_defaults(
                 domains.clone()
             };
             let ips = if ips.is_empty() { vec![server_ip] } else { ips.clone() };
-            let port = port.unwrap_or(context.doh_port);
-            let doh_path = doh_path.clone().unwrap_or_else(|| context.doh_path.clone());
+            let Some(port) = port.or_else(|| endpoint.as_ref().map(|e| e.listen_port)) else {
+                return Ok(None);
+            };
+            let Some(doh_path) =
+                doh_path.clone().or_else(|| endpoint.as_ref().map(|e| e.http_endpoint.clone()))
+            else {
+                return Ok(None);
+            };
             (domains, ips, port, doh_path)
         }
     };
@@ -853,12 +892,13 @@ mod tests {
         sync::Arc,
     };
 
-    use arc_swap::ArcSwap;
+    use arc_swap::{ArcSwap, ArcSwapOption};
     use landscape_common::lan_service::mac_binding::NoopMacBindingDataplane;
-    use landscape_common::net_proto::udp::dhcp::v4::{Opcode, OptionCode};
+    use landscape_common::net_proto::udp::dhcp::v4::{Flags, Opcode, OptionCode};
     use landscape_common::net_proto::udp::dhcp::{
         Decodable, Decoder, DhcpV4Message, DhcpV4MessageType, DhcpV4Option, Encodable, Encoder,
     };
+    use landscape_common::sys_config::DohRuntimeConfig;
     use landscape_common::{
         config_service::enrolled_device::EnrolledDevice,
         dns::dnr::{DHCPV4_DNR_OPTION_CODE, encode_dns_name},
@@ -872,8 +912,8 @@ mod tests {
 
     use super::{
         DHCPV4_DOMAIN_NAME_OPTION_CODE, DHCPV4_DOMAIN_SEARCH_OPTION_CODE, DHCPv4Server,
-        DhcpV4DnrRuntimeContext, LanHostnameConfig, client_chaddr, gen_ack, gen_offer,
-        handle_dhcp_message,
+        DhcpV4DnrRuntimeContext, LanHostnameRuntimeConfig, ack_dest, client_chaddr, gen_ack,
+        gen_offer, handle_dhcp_message,
     };
 
     fn option_payload(server: &DHCPv4Server, mac: &MacAddr, code: u8) -> Vec<u8> {
@@ -911,30 +951,70 @@ mod tests {
     }
 
     #[test]
-    fn resolve_options_hot_encodes_global_dnr_domains() {
+    fn resolve_options_hot_encodes_live_doh_endpoint_and_domains() {
         let config = DHCPv4ServerConfig {
             custom_options: vec![CustomDhcpOption::Dnr(DhcpV4DnrOptionConfig::Local)],
             ..DHCPv4ServerConfig::default()
         };
         let local_domains = Arc::new(ArcSwap::from_pointee(vec!["old.example.com".to_string()]));
+        let endpoint = Arc::new(ArcSwapOption::from(Some(Arc::new(DohRuntimeConfig {
+            listen_port: 443,
+            http_endpoint: "/old".into(),
+        }))));
         let dnr_context = DhcpV4DnrRuntimeContext {
             local_domains: local_domains.clone(),
-            doh_port: 443,
-            doh_path: "/dns-query".to_string(),
+            endpoint: endpoint.clone(),
         };
         let server = DHCPv4Server::init_with_enrolled(config, Some(dnr_context), vec![]);
         let mac = MacAddr::from_str("00:00:00:00:00:01").unwrap();
 
         let old_payload = option_payload(&server, &mac, DHCPV4_DNR_OPTION_CODE);
         local_domains.store(Arc::new(vec!["new.example.com".to_string()]));
+        endpoint.store(None);
+        assert!(
+            server
+                .resolve_options_for_mac(&mac)
+                .0
+                .iter()
+                .all(|(code, _)| *code != DHCPV4_DNR_OPTION_CODE)
+        );
+        endpoint.store(Some(Arc::new(DohRuntimeConfig {
+            listen_port: 8443,
+            http_endpoint: "/new".into(),
+        })));
         let new_payload = option_payload(&server, &mac, DHCPV4_DNR_OPTION_CODE);
 
         let old_name = encode_dns_name("old.example.com").unwrap();
         let new_name = encode_dns_name("new.example.com").unwrap();
+        assert!(contains_bytes(&old_payload, b"/old{?dns}"));
+        assert!(contains_bytes(&new_payload, b"/new{?dns}"));
+        assert!(contains_bytes(&new_payload, &8443u16.to_be_bytes()));
         assert!(contains_bytes(&old_payload, &old_name));
         assert!(!contains_bytes(&old_payload, &new_name));
         assert!(contains_bytes(&new_payload, &new_name));
         assert!(!contains_bytes(&new_payload, &old_name));
+    }
+
+    #[test]
+    fn explicit_custom_dnr_endpoint_survives_local_doh_stopping() {
+        let custom = CustomDhcpOption::Dnr(DhcpV4DnrOptionConfig::Custom {
+            domains: vec!["remote.example".into()],
+            ips: vec![Ipv4Addr::new(10, 0, 0, 1)],
+            port: Some(9443),
+            doh_path: Some("/remote".into()),
+        });
+        let server = DHCPv4Server::init_with_enrolled(
+            DHCPv4ServerConfig { custom_options: vec![custom], ..Default::default() },
+            Some(DhcpV4DnrRuntimeContext::default()),
+            vec![],
+        );
+        let payload = option_payload(
+            &server,
+            &MacAddr::from_str("00:00:00:00:00:01").unwrap(),
+            DHCPV4_DNR_OPTION_CODE,
+        );
+        assert!(contains_bytes(&payload, b"/remote{?dns}"));
+        assert!(contains_bytes(&payload, &9443u16.to_be_bytes()));
     }
 
     #[test]
@@ -1043,7 +1123,7 @@ mod tests {
                 config.clone(),
             ),
         ));
-        let state = Arc::new(ArcSwap::from_pointee(LanHostnameConfig {
+        let state = Arc::new(ArcSwap::from_pointee(LanHostnameRuntimeConfig {
             enable: true,
             lan_suffix: "lan".to_string(),
         }));
@@ -1053,14 +1133,14 @@ mod tests {
         assert!(matches!(server.lan_domain_option(DHCPV4_DOMAIN_NAME_OPTION_CODE).unwrap(),
                 DhcpV4Option::DomainName(ref d) if d == "lan"));
 
-        state.store(Arc::new(LanHostnameConfig {
+        state.store(Arc::new(LanHostnameRuntimeConfig {
             enable: true,
             lan_suffix: "home.arpa".to_string(),
         }));
         assert!(matches!(server.lan_domain_option(DHCPV4_DOMAIN_NAME_OPTION_CODE).unwrap(),
                 DhcpV4Option::DomainName(ref d) if d == "home.arpa"));
 
-        state.store(Arc::new(LanHostnameConfig {
+        state.store(Arc::new(LanHostnameRuntimeConfig {
             enable: false,
             lan_suffix: "home.arpa".to_string(),
         }));
@@ -1230,5 +1310,146 @@ mod tests {
         assert!(nak.opts().get(OptionCode::AddressLeaseTime).is_none());
         assert!(nak.opts().get(OptionCode::SubnetMask).is_none());
         assert!(nak.opts().get(OptionCode::Router).is_none());
+    }
+
+    fn reply_with(ciaddr: Ipv4Addr, yiaddr: Ipv4Addr, broadcast: bool) -> DhcpV4Message {
+        let mut reply = DhcpV4Message::default();
+        reply.set_ciaddr(ciaddr).set_yiaddr(yiaddr);
+        if broadcast {
+            reply.set_flags(Flags::from(0x8000u16));
+        }
+        reply
+    }
+
+    const TEST_SERVER_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
+
+    fn request_with(
+        ciaddr: Ipv4Addr,
+        server_id: Option<Ipv4Addr>,
+        with_requested_ip: Option<Ipv4Addr>,
+        broadcast: bool,
+    ) -> DhcpV4Message {
+        let mut req = DhcpV4Message::default();
+        req.set_ciaddr(ciaddr);
+        if let Some(id) = server_id {
+            req.opts_mut().insert(DhcpV4Option::ServerIdentifier(id));
+        }
+        if let Some(ip) = with_requested_ip {
+            req.opts_mut().insert(DhcpV4Option::RequestedIpAddress(ip));
+        }
+        if broadcast {
+            req.set_flags(Flags::from(0x8000u16));
+        }
+        req
+    }
+
+    fn unspecified_port68() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68)
+    }
+
+    #[test]
+    fn ack_dest_broadcasts_nonstandard_selecting_with_ciaddr() {
+        let offered = Ipv4Addr::new(192, 168, 1, 183);
+        let request = request_with(offered, Some(TEST_SERVER_IP), Some(offered), false);
+        let reply = reply_with(offered, offered, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_keeps_unicast_for_normal_renew() {
+        let assigned = Ipv4Addr::new(192, 168, 1, 150);
+        let request = request_with(assigned, None, None, false);
+        let reply = reply_with(assigned, assigned, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(assigned), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_keeps_unicast_when_requested_ip_differs_from_ciaddr() {
+        let ciaddr = Ipv4Addr::new(192, 168, 1, 150);
+        let requested = Ipv4Addr::new(192, 168, 1, 151);
+        let request = request_with(ciaddr, Some(TEST_SERVER_IP), Some(requested), false);
+        let reply = reply_with(ciaddr, requested, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(ciaddr), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_broadcasts_when_client_sets_broadcast_flag() {
+        let assigned = Ipv4Addr::new(192, 168, 1, 150);
+        let request = request_with(assigned, None, None, true);
+        let reply = reply_with(assigned, assigned, true);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_broadcasts_when_ciaddr_is_unspecified() {
+        let offered = Ipv4Addr::new(192, 168, 1, 183);
+        let request =
+            request_with(Ipv4Addr::UNSPECIFIED, Some(TEST_SERVER_IP), Some(offered), false);
+        let reply = reply_with(Ipv4Addr::UNSPECIFIED, offered, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_broadcasts_nak_to_lan_client() {
+        // RFC 2131 §4.1: NAK is broadcast when giaddr is zero; gen_ack leaves
+        // both ciaddr and yiaddr unspecified for a NAK.
+        let request =
+            request_with(Ipv4Addr::new(10, 99, 99, 99), Some(TEST_SERVER_IP), None, false);
+        let reply = reply_with(Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_unicasts_for_other_server_id() {
+        let offered = Ipv4Addr::new(192, 168, 1, 183);
+        let other = Ipv4Addr::new(192, 0, 2, 99);
+        let request = request_with(offered, Some(other), Some(offered), false);
+        let reply = reply_with(offered, offered, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(offered), 68),
+            "a request that selected another server must not get the compatibility broadcast"
+        );
+    }
+
+    #[test]
+    fn ack_dest_unicasts_when_only_server_id_is_present() {
+        let offered = Ipv4Addr::new(192, 168, 1, 183);
+        let request = request_with(offered, Some(TEST_SERVER_IP), None, false);
+        let reply = reply_with(offered, offered, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(offered), 68)
+        );
+    }
+
+    #[test]
+    fn ack_dest_unicasts_rebinding_with_requested_ip_only() {
+        let assigned = Ipv4Addr::new(192, 168, 1, 150);
+        let request = request_with(assigned, None, Some(assigned), false);
+        let reply = reply_with(assigned, assigned, false);
+        assert_eq!(
+            ack_dest(&reply, &request, TEST_SERVER_IP, unspecified_port68()),
+            SocketAddr::new(IpAddr::V4(assigned), 68),
+            "REBINDING with only option 50 must stay on the normal unicast path"
+        );
     }
 }

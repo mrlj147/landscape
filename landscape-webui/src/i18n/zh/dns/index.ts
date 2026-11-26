@@ -11,7 +11,6 @@ export default {
     priority: "优先级",
     remark: "备注",
     filter_result: "是否过滤结果",
-    flow_action: "流量动作",
     upstream_select: "DNS 上游选择",
     source_rules_title: "处理域名匹配规则 (无规则将全部匹配, 规则不分先后)",
     copy: "复制",
@@ -103,7 +102,10 @@ export default {
     request_mode: "上游请求模式",
     type_plaintext: "无加密",
     port: "端口",
-    port_placeholder: "DNS 规则中进行选择时用到",
+    unusual_port:
+      "{protocol} 通常使用端口 {usual}。请确认上游在端口 {port} 提供 {protocol} 服务。",
+    confirm_port: "确认上游端口",
+    save_custom_port: "使用此端口保存",
     domain: "域名",
     domain_placeholder: "无需包含 https 以及尾部 /dns-query",
     url: "URL",
@@ -132,10 +134,10 @@ export default {
     confirm_delete: "确定删除吗",
   },
   rule_card: {
-    traffic_action: "流量动作",
-    upstream_config: "DNS 上游配置",
+    answer_filter: "应答过滤",
+    upstream_config: "上游",
     match_rules: "匹配规则",
-    no_match_rules: "无匹配规则, 将会匹配所有域名",
+    no_match_rules: "匹配所有域名",
   },
   rule_drawer: {
     title_default: "编辑默认 DNS 规则",
@@ -146,6 +148,14 @@ export default {
     confirm_import: "确定从剪贴板导入吗?",
   },
   check_domain: {
+    matched_rule: "命中 DNS 规则",
+    matched_redirect: "命中重定向规则",
+    baidu: "百度",
+    ustc: "中科大",
+    run_query: "查询 DNS",
+    query_result: "DNS 查询结果",
+    no_records: "未返回记录",
+    cache_miss: "无缓存条目",
     error_upstream_timeout:
       "上游 DNS 查询超时。请检查该 Flow 出口到上游的连通性，或添加该线路可访问的备用 DNS。缓存结果不代表本次查询成功。",
     error_upstream_network:
@@ -159,15 +169,15 @@ export default {
     nxdomain: "上游确认该域名不存在（NXDOMAIN）。",
     no_data: "上游查询成功，但没有返回该类型的记录（NODATA）。",
     response_code: "DNS 响应码：{code}",
-
     enter_domain: "请输入待查询域名",
     test_flow_query: "测试 flow: {flow_id} 域名查询 (结果不缓存)",
     query_instruction: "输入域名后, 点击右侧按钮或使用回车",
     diagnostic_hint: "普通查询只做诊断，不会写入运行时缓存",
     delete_cache: "删除缓存",
-    refresh_cache: "回源刷新缓存",
-    confirm_delete_cache: "确定删除当前域名和类型的缓存吗?",
-    confirm_refresh_cache: "确定回源刷新并覆盖当前域名和类型的缓存吗?",
+    refresh_cache: "强制刷新缓存",
+    confirm_delete_cache: "确定删除这条查询结果对应的缓存吗？",
+    confirm_refresh_cache:
+      "将重新查询上游，并用返回结果覆盖这条查询对应的缓存。确定刷新吗？",
     delete_cache_success: "DNS 缓存已删除",
     refresh_cache_success: "DNS 缓存已从上游刷新",
     query_filtered_hint:

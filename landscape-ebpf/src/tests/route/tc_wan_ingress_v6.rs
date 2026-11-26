@@ -1,8 +1,9 @@
 //! v6 baseline for the `tc_route6_wan_ingress` worker. Mirrors
-//! `tc_wan_ingress.rs`; v6 specifics are called out inline.
+//! `tc_wan_ingress.rs`; v6 specifics are called out inline. Reverse cache
+//! keys are 40 bytes: daddr/saddr, dport/sport, protocol and zero padding.
 
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
 
@@ -13,18 +14,21 @@ use libbpf_rs::{
 };
 use zerocopy::IntoBytes;
 
-use crate::tests::{
-    TestSkb,
-    helper::map::{
-        LAN_CACHE, LAN_ROUTE_TYPE, ROUTE_TYPE_NEXTHOP, TARGET_IFINDEX, WAN_CACHE, WAN_IFINDEX,
-        WAN_ROUTE_TYPE, as_bytes, create_route6_cache_inner_map, insert_ip_mac_v6,
-        insert_route6_lan_entry, lookup_rt6_reverse_cache_value, put_rt6_reverse_cache_value,
+use crate::{
+    maps::Route6CacheKey,
+    skel::tc_wan_ingress_route::TcWanIngressRouteSkel,
+    tests::{
+        TestSkb,
+        helper::map::{
+            LAN_CACHE, LAN_ROUTE_TYPE, ROUTE_TYPE_NEXTHOP, TARGET_IFINDEX, WAN_CACHE, WAN_IFINDEX,
+            WAN_ROUTE_TYPE, as_bytes, create_route6_cache_inner_map, insert_ip_mac_v6,
+            insert_route6_lan_entry, lookup_inner_map, lookup_rt6_cache_value,
+            lookup_rt6_reverse_cache_value, put_rt6_reverse_cache_value,
+        },
+        isolated_pin_root,
+        pkt::{simple_ipv4_tcp, simple_ipv6_tcp_syn, simple_ipv6_udp},
     },
-    isolated_pin_root,
-    pkt::{simple_ipv4_tcp, simple_ipv6_tcp_syn},
 };
-
-use crate::skel::tc_wan_ingress_route::TcWanIngressRouteSkel;
 
 const RET_OK: i32 = 0;
 const RET_UNSPEC: i32 = -1;
@@ -87,14 +91,16 @@ fn run_wan6_ingress(
     (result.return_value as i32, out)
 }
 
-fn seed_wan_self_binding(skel: &TcWanIngressRouteSkel<'_>) {
-    crate::maps::wan::add_wan_ip(
-        &skel.maps.wan_ip_binding,
+fn seed_wan_self_host_route(skel: &TcWanIngressRouteSkel<'_>) {
+    insert_route6_lan_entry(
+        &skel.maps.rt6_lan_map,
+        128,
+        wan_self_addr(),
+        wan_self_addr(),
+        WAN_ROUTE_TYPE,
         WAN_IFINDEX,
-        IpAddr::V6(wan_self_addr()),
-        None,
-        64,
-        None,
+        false,
+        [0; 6],
     );
 }
 
@@ -119,12 +125,12 @@ fn seed_lan_entry(skel: &TcWanIngressRouteSkel<'_>, has_mac: bool) {
 fn wan6_ingress_own_address_goes_to_stack_without_cache() {
     load_skel!("tc-wan6-self", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
-    seed_wan_self_binding(&skel);
+    seed_wan_self_host_route(&skel);
 
     let pkt = simple_ipv6_tcp_syn(public_src(), wan_self_addr());
     let (ret, out) = run_wan6_ingress(&skel, &pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
 
-    assert_eq!(ret, RET_UNSPEC, "daddr == wan ingress address must go to the stack");
+    assert_eq!(ret, RET_UNSPEC, "daddr matching WAN /128 host route must go to the stack");
     assert_eq!(out, pkt);
     assert!(
         lookup_rt6_reverse_cache_value(
@@ -177,23 +183,63 @@ fn wan6_ingress_lan_redirect_with_static_mark_writes_reverse_wan_cache() {
     .expect("reverse WAN-cache entry must be written");
     assert_eq!(cache.ifindex, LOOPBACK_IFINDEX);
     assert_eq!(cache.has_mac, 1);
+    // The actual forward tuple is public_src():12345 -> lan_client():443.
     assert!(
-        lookup_rt6_reverse_cache_value(
-            &skel.maps.rt6_cache_map,
-            WAN_CACHE,
-            public_src(),
-            lan_client()
-        )
-        .is_none(),
+        lookup_rt6_cache_value(&skel.maps.rt6_cache_map, WAN_CACHE, public_src(), lan_client())
+            .is_none(),
         "forward-direction key must not exist"
     );
+}
+
+#[test]
+fn wan6_ingress_cache_key_includes_ports_protocol_and_pad() {
+    load_skel!("tc-wan6-tuple-key", skel);
+    create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
+    seed_lan_entry(&skel, false);
+
+    let pkt = simple_ipv6_udp(public_src(), lan_client());
+    let (ret, _out) = run_wan6_ingress(&skel, &pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
+    assert_eq!(ret, RET_REDIRECT);
+
+    assert_eq!(std::mem::size_of::<Route6CacheKey>(), 40);
+    let inner = lookup_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
+    let key = Route6CacheKey {
+        local_addr: lan_client().to_bits().to_be_bytes(),
+        remote_addr: public_src().to_bits().to_be_bytes(),
+        local_port: 53_u16.to_be(),
+        remote_port: 10_000_u16.to_be(),
+        protocol: 17,
+        _pad: [0; 3],
+    };
+    assert!(
+        inner.lookup(as_bytes(&key), MapFlags::ANY).expect("lookup UDP reverse tuple").is_some(),
+        "redirect must cache the complete reversed UDP tuple"
+    );
+
+    for wrong_key in [
+        Route6CacheKey {
+            local_port: 10_000_u16.to_be(),
+            remote_port: 53_u16.to_be(),
+            ..key
+        },
+        Route6CacheKey { protocol: 6, ..key },
+        Route6CacheKey { _pad: [1, 0, 0], ..key },
+    ] {
+        assert!(
+            inner
+                .lookup(as_bytes(&wrong_key), MapFlags::ANY)
+                .expect("lookup mismatched route tuple")
+                .is_none(),
+            "ports, protocol and padding are all part of the cache key"
+        );
+    }
 }
 
 #[test]
 fn wan6_ingress_no_lan_entry_passes_with_static_mark() {
     load_skel!("tc-wan6-miss", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
-    seed_wan_self_binding(&skel);
+    seed_wan_self_host_route(&skel);
 
     let (ret, _out) = run_wan6_ingress(&skel, &reply_pkt(), &mut wan_ctx(INGRESS_STATIC_MARK));
 
@@ -384,15 +430,15 @@ fn wan6_ingress_raw_l3_frame_prepends_mac_and_redirects() {
 }
 
 #[test]
-fn wan6_ingress_non_matching_wan_binding_continues_to_lan_redirect() {
+fn wan6_ingress_non_matching_wan_host_route_continues_to_lan_redirect() {
     load_skel!("tc-wan6-bindmiss", skel);
     create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
-    seed_wan_self_binding(&skel);
+    seed_wan_self_host_route(&skel);
     seed_lan_entry(&skel, false);
 
     let (ret, _out) = run_wan6_ingress(&skel, &reply_pkt(), &mut wan_ctx(INGRESS_STATIC_MARK));
 
-    assert_eq!(ret, RET_REDIRECT, "non-matching binding must not swallow the packet");
+    assert_eq!(ret, RET_REDIRECT, "non-matching WAN host route must not swallow the packet");
     let cache = lookup_rt6_reverse_cache_value(
         &skel.maps.rt6_cache_map,
         WAN_CACHE,
@@ -748,4 +794,116 @@ fn wan6_ingress_reverse_entry_in_lan_cache_blocks_wan_write() {
         .is_none(),
         "lan-cache hit must suppress the wan cache write"
     );
+}
+
+#[test]
+fn wan6_ingress_pd_wan_host_128_coexists_with_covering_lan_prefix() {
+    // Regression: a WAN /128 host route (WanReachable) derived from the same
+    // delegated prefix as a covering LAN /64 route must deliver to the local
+    // stack via LPM longest-prefix match, while both the delegated prefix base
+    // itself and other addresses in the same /64 still redirect to LAN.
+    load_skel!("tc-wan6-pd128-coexist", skel);
+    create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
+
+    let pd_prefix = Ipv6Addr::from_str("2001:db8:42::").unwrap();
+    let pd_lan_gw = Ipv6Addr::from_str("2001:db8:42::1").unwrap();
+    let wan_pd_host = Ipv6Addr::from_str("2001:db8:42::10").unwrap();
+    let lan_peer = Ipv6Addr::from_str("2001:db8:42::20").unwrap();
+
+    // Covering LAN prefix (/64) pointing to the LAN interface.
+    insert_route6_lan_entry(
+        &skel.maps.rt6_lan_map,
+        64,
+        pd_prefix,
+        pd_lan_gw,
+        LAN_ROUTE_TYPE,
+        TARGET_IFINDEX,
+        false,
+        [0; 6],
+    );
+    // WAN /128 host route (WanReachable) under the same /64.
+    insert_route6_lan_entry(
+        &skel.maps.rt6_lan_map,
+        128,
+        wan_pd_host,
+        wan_pd_host,
+        WAN_ROUTE_TYPE,
+        WAN_IFINDEX,
+        false,
+        [0; 6],
+    );
+
+    let host_pkt = simple_ipv6_tcp_syn(public_src(), wan_pd_host);
+    let (host_ret, host_out) =
+        run_wan6_ingress(&skel, &host_pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
+    assert_eq!(host_ret, RET_UNSPEC, "WAN /128 under covering LAN /64 must go to local stack");
+    assert_eq!(host_out, host_pkt);
+    assert!(
+        lookup_rt6_reverse_cache_value(
+            &skel.maps.rt6_cache_map,
+            WAN_CACHE,
+            wan_pd_host,
+            public_src()
+        )
+        .is_none(),
+        "local-stack /128 must not populate WAN reverse cache"
+    );
+
+    // The IPv6 PD base address itself is not automatically local unless an
+    // explicit /128 WanReachable host route exists for it; here it matches the
+    // covering LAN /64 and redirects to LAN.
+    let base_pkt = simple_ipv6_tcp_syn(public_src(), pd_prefix);
+    let (base_ret, _base_out) =
+        run_wan6_ingress(&skel, &base_pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
+    assert_eq!(
+        base_ret, RET_REDIRECT,
+        "IPv6 PD base without /128 WanReachable must not be treated as local"
+    );
+    let base_cache = lookup_rt6_reverse_cache_value(
+        &skel.maps.rt6_cache_map,
+        WAN_CACHE,
+        pd_prefix,
+        public_src(),
+    )
+    .expect("PD base LAN redirect under static mark must populate WAN reverse cache");
+    assert_eq!(base_cache.ifindex, LOOPBACK_IFINDEX);
+
+    let lan_pkt = simple_ipv6_tcp_syn(public_src(), lan_peer);
+    let (lan_ret, _lan_out) = run_wan6_ingress(&skel, &lan_pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
+    assert_eq!(lan_ret, RET_REDIRECT, "other LAN address in same /64 must still redirect to LAN");
+    let cache =
+        lookup_rt6_reverse_cache_value(&skel.maps.rt6_cache_map, WAN_CACHE, lan_peer, public_src())
+            .expect("LAN redirect under static mark must populate WAN reverse cache");
+    assert_eq!(cache.ifindex, LOOPBACK_IFINDEX);
+}
+
+#[test]
+fn wan6_ingress_pd_base_without_host_route_is_not_automatically_local() {
+    // Even without a covering LAN /64, publishing a WAN /128 host route under
+    // a delegated prefix must not make the PD base address itself local.
+    load_skel!("tc-wan6-pd-base-nonlocal", skel);
+    create_route6_cache_inner_map(&skel.maps.rt6_cache_map, WAN_CACHE);
+
+    let pd_base = Ipv6Addr::from_str("2001:db8:42::").unwrap();
+    let wan_pd_host = Ipv6Addr::from_str("2001:db8:42::10").unwrap();
+
+    insert_route6_lan_entry(
+        &skel.maps.rt6_lan_map,
+        128,
+        wan_pd_host,
+        wan_pd_host,
+        WAN_ROUTE_TYPE,
+        WAN_IFINDEX,
+        false,
+        [0; 6],
+    );
+
+    let base_pkt = simple_ipv6_tcp_syn(public_src(), pd_base);
+    let (base_ret, base_out) =
+        run_wan6_ingress(&skel, &base_pkt, &mut wan_ctx(INGRESS_STATIC_MARK));
+    assert_eq!(
+        base_ret, RET_OK,
+        "IPv6 PD base without its own /128 route must miss rt6_lan_map instead of returning UNSPEC"
+    );
+    assert_eq!(base_out, base_pkt);
 }

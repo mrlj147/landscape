@@ -28,7 +28,7 @@ struct route_conn_value {
     } target;
 };
 _Static_assert(sizeof(struct route_conn_key) == 40, "route conn key ABI");
-_Static_assert(sizeof(struct route_conn_value) == 56, "route conn value ABI");
+_Static_assert(sizeof(struct route_conn_value) == 32, "route conn value ABI");
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, struct route_policy_key);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WanLinkConfig } from "@landscape-router/types/api/schemas";
-import { default_health_check, wan_link_from_payload } from "./wan_link";
+import { default_health_check, wan_link_from_payload } from "./wan/wan_link";
 
 describe("health probe family switches", () => {
   it("preserves explicit opt-outs when loading and serializing WAN settings", () => {

@@ -5,7 +5,7 @@ use libbpf_rs::{MapCore, MapFlags, MapHandle, MapType};
 pub fn init_connection_maps(paths: &LandscapeMapPath) -> LdEbpfResult<()> {
     for (name, path, map_type, key_size, value_size, max_entries) in [
         ("rt_conn_policy", &paths.rt_conn_policy, MapType::Hash, 8, 8, 512),
-        ("rt_connections", &paths.rt_connections, MapType::LruHash, 40, 56, 65536),
+        ("rt_connections", &paths.rt_connections, MapType::LruHash, 40, 32, 65536),
     ] {
         recreate_pinned_map(
             &MapCreateSpec {

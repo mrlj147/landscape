@@ -49,7 +49,7 @@
 
 ```bash
 ./fmt.sh --rust      # 仅格式化 Rust（cargo fmt）
-./fmt.sh --c         # 仅格式化 C/eBPF（clang-format-18）
+./fmt.sh --c         # 仅格式化 C/eBPF（clang-format-19）
 ./fmt.sh --frontend  # 仅格式化前端（prettier）
 ```
 
@@ -61,6 +61,8 @@ cargo test -p landscape-ebpf --features bpf-test   # eBPF 集成测试（需要 
 pnpm --filter landscape-webui run format:check
 pnpm --filter landscape-webui build
 ```
+
+涉及网络行为或测试环境的改动，按影响范围运行相关 Containerlab 用例。[E2E 用例选择说明](tests/e2e/containerlab/README.md#按改动范围选择用例)
 
 ## 代码规范
 
@@ -85,7 +87,7 @@ pnpm --filter landscape-webui build
 
 ### C / eBPF
 
-- 使用 `./fmt.sh --c` 或 `clang-format-18` 格式化。项目配置了 [`.clang-format`](./.clang-format)。
+- 使用 `./fmt.sh --c` 或 `clang-format-19` 格式化。项目配置了 [`.clang-format`](./.clang-format)。
 - eBPF 程序位于 `landscape-ebpf/src/bpf/`。不要格式化自动生成的 `vmlinux.h`。
 - 确保 BPF 程序兼容 [BUILD.zh.md](./BUILD.zh.md) 中记录的内核版本。
 

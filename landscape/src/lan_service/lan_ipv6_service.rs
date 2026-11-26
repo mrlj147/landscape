@@ -240,8 +240,10 @@ impl ServiceStarterTrait for LanIPv6Service {
             let params = Ipv6LanReplyParams {
                 preferred_lifetime,
                 valid_lifetime,
+                rdnss_lifetime: config.config.rdnss_lifetime(),
                 ra_flags: ra_flags_raw,
                 ra_autonomous,
+                rdnss_link_local_only: config.config.rdnss_link_local_only,
             };
 
             // ── Prefix change notification channel ──
@@ -441,21 +443,16 @@ impl LanIPv6ManagerService {
         let service_clone = service.clone();
         spawn_task(task_label::task::LAN_IPV6_SERVICE_OBSERVER, async move {
             while let Ok(msg) = dev_observer.recv().await {
-                match msg {
-                    IfaceObserverAction::Up(iface_name) => {
-                        tracing::info!("restart {iface_name} LAN IPv6 service");
-                        let service_config = if let Some(service_config) =
-                            store.find_by_id(iface_name.clone()).await.unwrap()
-                        {
-                            service_config
-                        } else {
-                            continue;
-                        };
+                let IfaceObserverAction::Up(iface_name) = msg else {
+                    continue;
+                };
+                tracing::info!("restart {iface_name} LAN IPv6 service");
+                let Some(service_config) = store.find_by_id(iface_name.clone()).await.unwrap()
+                else {
+                    continue;
+                };
 
-                        let _ = service_clone.update_service(service_config).await;
-                    }
-                    IfaceObserverAction::Down(_) => {}
-                }
+                let _ = service_clone.update_service(service_config).await;
             }
         });
 
