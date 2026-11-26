@@ -1175,7 +1175,7 @@ async fn running_health_rebinds_on_ipv4_renewal_and_ipv6_pd_address_change() {
                 .unwrap()
                 .unwrap();
             assert_eq!(request.dev, "eth0");
-            assert_eq!(request.mark, 0x0200_0007);
+            assert_eq!(request.mark, 0x0400_0007);
             request.reply.send(Ok(Some(Duration::from_millis(1)))).unwrap();
         }
         let wait_healthy = || async {
@@ -1218,7 +1218,7 @@ async fn running_health_rebinds_on_ipv4_renewal_and_ipv6_pd_address_change() {
                 .unwrap()
                 .unwrap();
             assert_eq!(request.dev, "eth0");
-            assert_eq!(request.mark, 0x0200_0007);
+            assert_eq!(request.mark, 0x0400_0007);
             if request.src == new_source && request.run_id == if ipv6_change { 1 } else { 2 } {
                 break request;
             }
