@@ -96,7 +96,7 @@ fn host_probe_ipv6_dns_retains_nat_state_and_accepts_reply() {
         let dst: Ipv6Addr = "2001:db8:2::53".parse().unwrap();
         let ro = open.maps.rodata_data.as_deref_mut().unwrap();
         ro.wan_ro_prefix6.b = crate::stages::nat6::wan_ro_prefix6(Some(src));
-        ro.wan_ro_npt_mask = crate::maps::wan::compute_npt_mask(64);
+        ro.wan_ro_npt_mask = crate::stages::nat6::compute_npt_mask(64);
         let nat = open.load().unwrap();
         let (ret, _) = routed(&nat.progs.tc_nat_wan_egress_v6, &udp6(src, dst, 54321, 53), probe);
         assert_eq!(ret, -1);

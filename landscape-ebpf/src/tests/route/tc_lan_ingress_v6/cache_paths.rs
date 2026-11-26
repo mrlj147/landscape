@@ -223,6 +223,10 @@ fn put_wan_cache_with_chain(
     let key = crate::maps::Route6CacheKey {
         local_addr: local_addr().octets(),
         remote_addr: remote_addr().octets(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let entry = crate::maps::Route6CacheValue {
         ifindex,

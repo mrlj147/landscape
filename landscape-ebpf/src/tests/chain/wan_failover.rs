@@ -162,10 +162,10 @@ fn real_traffic(ipv6: bool) {
     let _tc = TCAttach::attach_ingress(&skel.progs.tc_lan_ingress_route, lan.host_ifindex() as i32);
     // Runtime-only flow 0 exercises default slot selection; no reserved-id
     // configuration is persisted or accepted by the API.
-    let mut db1 = TestXdpDummySkelBuilder::default();
+    let db1 = TestXdpDummySkelBuilder::default();
     let mut ob1 = MaybeUninit::uninit();
     let dummy1 = db1.open(&mut ob1).unwrap().load().unwrap();
-    let mut db2 = TestXdpDummySkelBuilder::default();
+    let db2 = TestXdpDummySkelBuilder::default();
     let mut ob2 = MaybeUninit::uninit();
     let dummy2 = db2.open(&mut ob2).unwrap().load().unwrap();
     // Health probes must reach a responding peer before dummy counters attach.

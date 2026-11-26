@@ -106,6 +106,10 @@ pub(super) fn seed_route(
             let key = Route4CacheKey {
                 local_addr: src.to_bits().to_be(),
                 remote_addr: dst.to_bits().to_be(),
+                local_port: 12345_u16.to_be(),
+                remote_port: 443_u16.to_be(),
+                protocol: 6,
+                _pad: [0; 3],
             };
             RouteCase {
                 family,
@@ -138,6 +142,10 @@ pub(super) fn seed_route(
             let key = Route6CacheKey {
                 local_addr: src.octets(),
                 remote_addr: dst.octets(),
+                local_port: 12345_u16.to_be(),
+                remote_port: 443_u16.to_be(),
+                protocol: 6,
+                _pad: [0; 3],
             };
             RouteCase {
                 family,

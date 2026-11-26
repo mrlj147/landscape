@@ -247,6 +247,10 @@ fn put_wan_cache_with_chain(
     let key = crate::maps::Route4CacheKey {
         local_addr: client_addr().to_bits().to_be(),
         remote_addr: remote_wan_addr().to_bits().to_be(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let entry = crate::maps::Route4CacheValue {
         ifindex,

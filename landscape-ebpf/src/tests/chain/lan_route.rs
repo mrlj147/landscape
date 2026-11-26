@@ -554,6 +554,10 @@ fn xdp_lan_route_missing_wan_cache_chain_drops_without_rerouting() {
     let cache_key = Route4CacheKey {
         local_addr: LAN_HOST.to_bits().to_be(),
         remote_addr: REMOTE.to_bits().to_be(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let cache_value = Route4CacheValue {
         xdp_redirect_able: 1,
@@ -687,6 +691,10 @@ fn xdp_lan_route_missing_wan_cache_chain_drops_without_rerouting_v6() {
     let cache_key = Route6CacheKey {
         local_addr: LAN_HOST.octets(),
         remote_addr: REMOTE.octets(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let cache_value = Route6CacheValue {
         xdp_redirect_able: 1,
@@ -874,6 +882,10 @@ fn xdp_lan_route_zero_ifindex_lan_cache_rebuilds_to_current_flow() {
     let key = Route4CacheKey {
         local_addr: local.to_bits().to_be(),
         remote_addr: remote.to_bits().to_be(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let stale = Route4CacheValue { mark_value: 0x0305, ..Default::default() };
     let expected = Route4CacheValue {
@@ -907,6 +919,10 @@ fn xdp_lan_route_zero_ifindex_lan_cache_rebuilds_to_current_flow_v6() {
     let key = Route6CacheKey {
         local_addr: local.octets(),
         remote_addr: remote.octets(),
+        local_port: 12345_u16.to_be(),
+        remote_port: 443_u16.to_be(),
+        protocol: 6,
+        _pad: [0; 3],
     };
     let stale = Route6CacheValue { mark_value: 0x0305, ..Default::default() };
     let expected = Route6CacheValue {
