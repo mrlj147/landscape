@@ -57,7 +57,11 @@ jobs:
           cargo test --locked -p landscape --lib wan_service::
           cargo test --locked -p landscape --lib flow::rule_service::tests::
       - name: Compile privileged health and DNS socket tests
-        run: cargo test --locked -p landscape -p landscape-dns --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-service-build.json"
+        run: |
+          cargo test --locked -p landscape -p landscape-dns --lib --no-run --message-format=json > "$RUNNER_TEMP/wan-service-build.json" || {
+            jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' "$RUNNER_TEMP/wan-service-build.json" >&2
+            exit 1
+          }
       - name: Probe confinement and DNS socket bindings
         run: |
           service_test_bin=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "landscape" and .profile.test == true) | .executable // empty' "$RUNNER_TEMP/wan-service-build.json" | tail -1)
