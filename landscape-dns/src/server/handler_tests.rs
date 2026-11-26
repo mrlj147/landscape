@@ -537,7 +537,7 @@ mod tests {
                     assert_eq!(result.response_code, code, "native={native}, action={action:?}");
                     assert_eq!(result.cache_records.as_ref().unwrap().len(), 1);
                     if error.is_none() {
-                        assert!(result.records.as_ref().unwrap().is_empty());
+                        assert!(result.records.as_ref().is_none_or(|records| records.is_empty()));
                     } else {
                         assert!(result.records.is_none());
                     }

@@ -245,16 +245,17 @@ impl<'a> ResolveChain<'a> {
                         CacheWritePolicy::ReadOnly,
                     )
                     .await;
-                result.response_code = Some(answer.response_code.into());
+                if lookup_error.is_none() {
+                    result.response_code = Some(answer.response_code.into());
+                }
                 result.error = lookup_error.or_else(|| match answer.response_code {
                     ResponseCode::NoError | ResponseCode::NXDomain => None,
                     _ => Some(DnsCheckError::UpstreamResponse),
                 });
                 if result.error.is_none()
-                    && matches!(
-                        answer.response_code,
-                        ResponseCode::NoError | ResponseCode::NXDomain
-                    )
+                    && (answer.response_code == ResponseCode::NoError
+                        || (answer.response_code == ResponseCode::NXDomain
+                            && !answer.records.is_empty()))
                 {
                     result.records = Some(report_records(
                         answer.records,
@@ -346,7 +347,9 @@ impl<'a> ResolveChain<'a> {
                 CacheWritePolicy::Write { query_filtered },
             )
             .await;
-        result.response_code = Some(answer.response_code.into());
+        if lookup_error.is_none() {
+            result.response_code = Some(answer.response_code.into());
+        }
         result.error = lookup_error.or_else(|| match answer.response_code {
             ResponseCode::NoError | ResponseCode::NXDomain => None,
             _ => Some(DnsCheckError::UpstreamResponse),
